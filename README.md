@@ -29,10 +29,16 @@ bit-identical to the reference notebook on the research example.
 ## Install
 
 ```bash
-pip install -e .
+pip install pimf
 ```
 
 Requires Python >= 3.10. NumPy is the only dependency.
+
+For development, clone the repo and install in editable mode:
+
+```bash
+pip install -e .
+```
 
 ## Quickstart
 
