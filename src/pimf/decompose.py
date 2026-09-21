@@ -1,6 +1,9 @@
 """Intrinsic multiscale filtering: the decomposition driver."""
 
+from concurrent.futures import ThreadPoolExecutor
+from contextlib import nullcontext
 from dataclasses import dataclass
+from itertools import repeat
 from numbers import Integral, Real
 
 import numpy as np
@@ -14,7 +17,8 @@ from .kernels import squared_triangle
 @dataclass(frozen=True)
 class StageInfo:
     """Per-stage diagnostics; the closed-form path reports iterations=1 and
-    final_max_delta=nan."""
+    final_max_delta=nan. Parallel fits report maxima across chunks and converge
+    only when every chunk converges."""
 
     stage: int
     window_size: int
@@ -80,7 +84,15 @@ class IMF:
     clipped gradient descent. Each decompose() call returns an independent result.
     """
 
-    def __init__(self, contrast=None, kernel=None, *, boundary="wrap", max_iter=60, tol=1e-6):
+    def __init__(
+        self, contrast=None, kernel=None, *, boundary="wrap", max_iter=60, tol=1e-6, workers=1
+    ):
+        if (
+            isinstance(workers, (bool, np.bool_))
+            or not isinstance(workers, Integral)
+            or workers <= 0
+        ):
+            raise ValueError("workers must be a positive integer")
         if isinstance(max_iter, (bool, np.bool_)) or not isinstance(max_iter, Integral):
             raise ValueError("max_iter must be a positive integer")
         if max_iter <= 0:
@@ -97,6 +109,7 @@ class IMF:
         self.boundary = boundary
         self.max_iter = max_iter
         self.tol = tol
+        self.workers = int(workers)
 
     def decompose(self, y, *, h1=0.25, a=SQRT_2, k_max=8, h_min=None, window_sizes=None):
         """Extract up to k_max components with h[k+1] = h[k] / a.
@@ -109,6 +122,12 @@ class IMF:
         Set k_max=None to stop by h_min alone. Explicit positive odd window_sizes
         use integer radii and cannot be combined with nondefault schedule options.
         The final residual is separate from the extracted component count.
+
+        workers > 1 fits contiguous chunks of windows in threads, with at least
+        64 windows per chunk except the last. Stages remain sequential. Each
+        chunk stops independently, so robust results can vary with workers near
+        the solver tolerance. Custom contrasts must support concurrent calls
+        without mutating shared state or their input arrays.
         """
         y = np.asarray(y, dtype=float)
         if y.ndim != 1 or y.size == 0 or not np.all(np.isfinite(y)):
@@ -174,23 +193,41 @@ class IMF:
         residual = y.copy()
         components, stages = [], []
         solve = getattr(self.contrast, "solve", None)
-        for stage, (size, h) in enumerate(zip(window_sizes, bandwidths, strict=True), start=1):
-            if explicit_windows:
-                weights = self.kernel.weights(size)
-            else:
-                weights = self.kernel.weights(size, bandwidth=h * len(y))
-            padded = np.pad(residual, size // 2, mode=self.boundary)
-            windows = sliding_window_view(padded, size)
+
+        def fit(windows, weights):
             if callable(solve):
-                component, iterations, delta = solve(windows, weights), 1, float("nan")
-            else:
-                component, iterations, delta = _gd_fit_windows(
-                    windows, weights, self.contrast, self.max_iter, self.tol
-                )
-            components.append(component)
-            residual = residual - component
-            converged = callable(solve) or delta <= self.tol * (
-                1 + float(np.max(np.abs(component)))
+                return solve(windows, weights), 1, float("nan"), True
+            component, iterations, delta = _gd_fit_windows(
+                windows, weights, self.contrast, self.max_iter, self.tol
             )
-            stages.append(StageInfo(stage, size, iterations, delta, h, bool(converged)))
+            converged = delta <= self.tol * (1 + float(np.max(np.abs(component))))
+            return component, iterations, delta, bool(converged)
+
+        chunk_size = (
+            len(y) if self.workers == 1 else max(64, (len(y) + self.workers - 1) // self.workers)
+        )
+        chunks = [slice(start, start + chunk_size) for start in range(0, len(y), chunk_size)]
+        with (
+            ThreadPoolExecutor(max_workers=len(chunks)) if len(chunks) > 1 else nullcontext()
+        ) as executor:
+            for stage, (size, h) in enumerate(zip(window_sizes, bandwidths, strict=True), start=1):
+                if explicit_windows:
+                    weights = self.kernel.weights(size)
+                else:
+                    weights = self.kernel.weights(size, bandwidth=h * len(y))
+                padded = np.pad(residual, size // 2, mode=self.boundary)
+                windows = sliding_window_view(padded, size)
+                if executor is None:
+                    component, iterations, delta, converged = fit(windows, weights)
+                else:
+                    fits = list(
+                        executor.map(fit, (windows[chunk] for chunk in chunks), repeat(weights))
+                    )
+                    component = np.concatenate([part[0] for part in fits])
+                    iterations = max(part[1] for part in fits)
+                    delta = max(part[2] for part in fits)
+                    converged = all(part[3] for part in fits)
+                components.append(component)
+                residual = residual - component
+                stages.append(StageInfo(stage, size, iterations, delta, h, converged))
         return IMFResult(np.stack(components), residual, stages, window_sizes, bandwidths)

@@ -13,7 +13,7 @@
 <a class="skip-link" href="#main">Skip to content</a>
 <header class="topbar">
   <a class="brand" href="#overview"><img src="favicon.svg" alt="" width="30" height="30">pimf<span>documentation</span></a>
-  <div class="toplinks"><span class="version">0.2.1</span><a href="https://github.com/mkuziuk/pimf">GitHub <span aria-hidden="true">↗</span></a></div>
+  <div class="toplinks"><span class="version">0.3.0</span><a href="https://github.com/mkuziuk/pimf">GitHub <span aria-hidden="true">↗</span></a></div>
 </header>
 <div class="layout">
   <aside class="sidebar">
@@ -21,7 +21,7 @@
       <p class="nav-label">Start here</p>
       <a href="#overview">Overview</a><a href="#quickstart">Install &amp; quickstart</a><a href="#results">Reading the result</a>
       <p class="nav-label">Configure the method</p>
-      <a href="#schedule">Window schedule</a><a href="#kernels">Kernels</a><a href="#contrasts">Contrasts</a><a href="#boundaries">Boundaries &amp; convergence</a>
+      <a href="#schedule">Window schedule</a><a href="#kernels">Kernels</a><a href="#contrasts">Contrasts</a><a href="#boundaries">Boundaries &amp; convergence</a><a href="#parallel">Parallel execution</a>
       <p class="nav-label">Reference</p>
       <a href="#api">Python API</a><a href="#custom">Custom kernels &amp; contrasts</a>
     </nav>
@@ -158,10 +158,18 @@ edge:     1 1 | 1 2 3 4 | 4 4</code></pre>
 careful_result = careful.decompose(y, k_max=6)</code></pre>
       <p>Check <code>stage.converged</code>: <code>False</code> means the estimate was returned before it met the tolerance. Increase <code>max_iter</code> to allow more work, or increase <code>tol</code> to accept a larger final update. This is separate from <code>k_max</code>, which limits the number of components.</p>
     </section>
+    <section id="parallel">
+      <h2>Parallel execution</h2>
+      <pre><code class="language-python">parallel = IMF(contrast=SmoothAbs(H=0.2), kernel=epanechnikov, workers=4)
+parallel_result = parallel.decompose(y)</code></pre>
+      <p><code>workers</code> is a positive integer and defaults to <code>1</code>. Larger values fit chunks of windows in separate threads. Stages still run in order because each uses the previous residual. Short signals use fewer threads, with at least 64 windows per chunk except the last.</p>
+      <p>Each chunk stops independently. Changing <code>workers</code> can change robust results near the solver tolerance; lower <code>tol</code> for closer agreement. More workers may help large robust fits, but thread overhead can slow small signals or direct weighted means. Compare timings on your data.</p>
+    </section>
     <section id="api">
       <h2>Python API</h2>
       <h3><code>IMF</code></h3>
-      <pre><code>IMF(contrast=None, kernel=None, *, boundary="wrap", max_iter=60, tol=1e-6)
+      <pre><code>IMF(contrast=None, kernel=None, *, boundary="wrap", max_iter=60,
+    tol=1e-6, workers=1)
 
 IMF.decompose(y, *, h1=0.25, a=sqrt(2), k_max=8,
               h_min=None, window_sizes=None) -&gt; IMFResult</code></pre>
@@ -177,9 +185,9 @@ kernel(window_size, *, bandwidth=None)</code></pre>
 contrast.psi(r)                  # score rho'(r)
 contrast.curvature()             # positive global upper bound on rho''
 contrast.solve(windows, weights) # optional direct minimizer</code></pre>
-      <p>Loss and score methods must accept NumPy arrays. A direct solver receives rows of local observations and a normalized weight vector, and returns one estimate per row. Without a direct solver, supply a finite positive curvature bound for a convex differentiable contrast.</p>
+      <p>Loss and score methods must accept NumPy arrays. A direct solver receives rows of local observations and a normalized weight vector, and returns one estimate per row. Without a direct solver, supply a finite positive curvature bound for a convex differentiable contrast. With multiple workers, contrast methods may run concurrently and must not mutate shared state or input arrays.</p>
       <h3><code>IMFResult</code> and <code>StageInfo</code></h3>
-      <p>See <a href="#results">Reading the result</a> for their fields. A stage converges when <code>final_max_delta &lt;= tol * (1 + max(abs(component)))</code>. Direct solvers report <code>iterations=1</code>, <code>final_max_delta=nan</code> and <code>converged=True</code>.</p>
+      <p>See <a href="#results">Reading the result</a> for their fields. Each solver chunk converges when <code>final_max_delta &lt;= tol * (1 + max(abs(component)))</code>, using that chunk's values. A stage reports the maximum <code>iterations</code> and <code>final_max_delta</code> across chunks, and <code>converged=True</code> only if every chunk converged. With one worker, the whole stage is one chunk. Direct solvers report <code>iterations=1</code>, <code>final_max_delta=nan</code> and <code>converged=True</code>.</p>
     </section>
     <section id="custom">
       <h2>Custom kernels &amp; contrasts</h2>
