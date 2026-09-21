@@ -1,12 +1,14 @@
 """Intrinsic multiscale filtering: the decomposition driver."""
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from numbers import Integral, Real
 
 import numpy as np
 from numpy.lib.stride_tricks import sliding_window_view
 
+from ._erf import SQRT_2
 from .contrasts import Quadratic, SmoothAbs
-from .kernels import SquaredTriangle
+from .kernels import squared_triangle
 from .schedule import make_window_schedule
 
 
@@ -19,6 +21,8 @@ class StageInfo:
     window_size: int
     iterations: int
     final_max_delta: float
+    bandwidth: float | None = None
+    converged: bool = True
 
 
 @dataclass
@@ -29,6 +33,7 @@ class IMFResult:
     residual: np.ndarray
     stages: list[StageInfo]
     window_sizes: list[int]
+    bandwidths: list[float] = field(default_factory=list)
 
     @property
     def reconstruction(self):
@@ -50,7 +55,10 @@ def _gd_fit_windows(windows, weights, contrast, max_iter, tol):
 
     # The weighted score is Lipschitz with constant curvature() because the
     # weights are normalized, so this step size keeps the iteration stable.
-    step = 0.95 / contrast.curvature()
+    curvature = contrast.curvature()
+    if not np.isfinite(curvature) or curvature <= 0:
+        raise ValueError("contrast curvature must be finite and positive")
+    step = 0.95 / curvature
 
     iterations = 0
     max_delta = float("nan")
@@ -66,58 +74,139 @@ def _gd_fit_windows(windows, weights, contrast, max_iter, tol):
     return x, iterations, max_delta
 
 
-def _smooth_stage(residual, window_size, kernel, contrast, boundary, max_iter, tol):
-    """One smoothing pass: fit the local location at every position."""
-    weights = kernel.weights(window_size)
-    radius = window_size // 2
-    padded = np.pad(residual, pad_width=radius, mode=boundary)
-    windows = sliding_window_view(padded, window_size)
+class IMF:
+    """Reusable local M-estimator configuration for one-dimensional signals.
 
-    solve = getattr(contrast, "solve", None)
-    if callable(solve):
-        return solve(windows, weights), 1, float("nan")
-    return _gd_fit_windows(windows, weights, contrast, max_iter, tol)
+    Quadratic contrasts use their closed-form solver. Other contrasts use
+    clipped gradient descent. Each decompose() call returns an independent result.
+    """
+
+    def __init__(self, contrast=None, kernel=None, *, boundary="wrap", max_iter=60, tol=1e-6):
+        if isinstance(max_iter, (bool, np.bool_)) or not isinstance(max_iter, Integral):
+            raise ValueError("max_iter must be a positive integer")
+        if max_iter <= 0:
+            raise ValueError("max_iter must be a positive integer")
+        if (
+            isinstance(tol, (bool, np.bool_))
+            or not isinstance(tol, Real)
+            or not np.isfinite(tol)
+            or tol <= 0
+        ):
+            raise ValueError("tol must be finite and positive")
+        self.contrast = Quadratic() if contrast is None else contrast
+        self.kernel = squared_triangle if kernel is None else kernel
+        self.boundary = boundary
+        self.max_iter = max_iter
+        self.tol = tol
+
+    def decompose(self, y, *, h1=0.25, a=SQRT_2, k_max=8, h_min=None, window_sizes=None):
+        """Extract up to k_max components with h[k+1] = h[k] / a.
+
+        Bandwidths are half-widths on a unit-period regular grid, with sample
+        spacing 1 / len(y). h1=0.25 covers about half the observations. Kernel
+        weights use the exact bandwidth; support windows are rounded outwards
+        to odd sizes. Stop before h < h_min, or after a center-only window.
+
+        Set k_max=None to stop by h_min alone. Explicit positive odd window_sizes
+        use integer radii and cannot be combined with nondefault schedule options.
+        The final residual is separate from the extracted component count.
+        """
+        y = np.asarray(y, dtype=float)
+        if y.ndim != 1 or y.size == 0 or not np.all(np.isfinite(y)):
+            raise ValueError("y must be a nonempty, finite one-dimensional signal")
+
+        explicit_windows = window_sizes is not None
+        if explicit_windows:
+            if h1 != 0.25 or a != SQRT_2 or k_max != 8 or h_min is not None:
+                raise ValueError("window_sizes cannot be combined with schedule parameters")
+            try:
+                window_sizes = list(window_sizes)
+            except TypeError as error:
+                raise ValueError(
+                    "window_sizes must be a sequence of positive odd integers"
+                ) from error
+            if not window_sizes:
+                raise ValueError("window_sizes must not be empty")
+            for size in window_sizes:
+                if (
+                    isinstance(size, (bool, np.bool_))
+                    or not isinstance(size, Real)
+                    or not np.isfinite(size)
+                    or size < 1
+                    or size % 2 != 1
+                ):
+                    raise ValueError("window sizes must be positive odd integers")
+            window_sizes = [int(size) for size in window_sizes]
+            bandwidths = [size // 2 / len(y) for size in window_sizes]
+        else:
+            if not isinstance(h1, Real) or not np.isfinite(h1) or not 0 < h1 <= 0.5:
+                raise ValueError("h1 must be finite and in (0, 0.5]")
+            if not isinstance(a, Real) or not np.isfinite(a) or a <= 1:
+                raise ValueError("a must be finite and greater than one")
+            if k_max is not None and (
+                isinstance(k_max, (bool, np.bool_)) or not isinstance(k_max, Integral) or k_max <= 0
+            ):
+                raise ValueError("k_max must be a positive integer or None")
+            if h_min is not None and (
+                not isinstance(h_min, Real) or not np.isfinite(h_min) or not 0 < h_min <= h1
+            ):
+                raise ValueError("h_min must be finite and in (0, h1]")
+            if k_max is None and h_min is None:
+                raise ValueError("provide h_min when k_max is None")
+            window_sizes, bandwidths = [], []
+            h = float(h1)
+            while k_max is None or len(bandwidths) < k_max:
+                if h_min is not None and h < h_min:
+                    if not np.isclose(h, h_min, rtol=1e-14, atol=0):
+                        break
+                    h = float(h_min)
+                radius = h * len(y)
+                # Snap grid-boundary roundoff in both support and weights.
+                rounded = round(radius)
+                if rounded >= 1 and abs(radius - rounded) < 1e-9:
+                    radius = float(rounded)
+                support_radius = 0 if radius < 1 else int(np.ceil(radius))
+                bandwidths.append(h)
+                window_sizes.append(2 * support_radius + 1)
+                if radius < 1 or h == h_min:
+                    break
+                h /= a
+
+        residual = y.copy()
+        components, stages = [], []
+        solve = getattr(self.contrast, "solve", None)
+        for stage, (size, h) in enumerate(zip(window_sizes, bandwidths, strict=True), start=1):
+            if explicit_windows:
+                weights = self.kernel.weights(size)
+            else:
+                weights = self.kernel.weights(size, bandwidth=h * len(y))
+            padded = np.pad(residual, size // 2, mode=self.boundary)
+            windows = sliding_window_view(padded, size)
+            if callable(solve):
+                component, iterations, delta = solve(windows, weights), 1, float("nan")
+            else:
+                component, iterations, delta = _gd_fit_windows(
+                    windows, weights, self.contrast, self.max_iter, self.tol
+                )
+            components.append(component)
+            residual = residual - component
+            converged = callable(solve) or delta <= self.tol * (
+                1 + float(np.max(np.abs(component)))
+            )
+            stages.append(StageInfo(stage, size, iterations, delta, h, bool(converged)))
+        return IMFResult(np.stack(components), residual, stages, window_sizes, bandwidths)
 
 
 def imf(y, window_sizes=None, contrast=None, kernel=None, boundary="wrap", max_iter=60, tol=1e-6):
-    """Decompose a 1-D signal into multiscale components plus a residual.
-
-    At each stage the current residual is smoothed by a local M-estimator
-    defined by kernel and contrast; the smooth becomes that stage's component
-    and the recursion continues on what is left:
-    r_1 = y, S_k = smooth(r_k), r_{k+1} = r_k - S_k.
-
-    Defaults: window_sizes = make_window_schedule(len(y)), contrast =
-    Quadratic() (the linear IMF), kernel = SquaredTriangle(). boundary is
-    passed to np.pad ("wrap", "reflect", "edge", ...). max_iter and tol apply
-    only when the contrast has no closed-form solve.
-    """
+    """Compatibility function retaining the original integer-window schedule."""
     y = np.asarray(y, dtype=float)
-    if y.ndim != 1:
-        raise ValueError("y must be one-dimensional")
-    if len(y) == 0:
-        raise ValueError("y must not be empty")
-
+    if y.ndim != 1 or y.size == 0:
+        raise ValueError("y must be a nonempty one-dimensional signal")
     if window_sizes is None:
         window_sizes = make_window_schedule(len(y))
-    window_sizes = [int(size) for size in window_sizes]
-    if contrast is None:
-        contrast = Quadratic()
-    if kernel is None:
-        kernel = SquaredTriangle()
-
-    residual = y.copy()
-    imfs = []
-    stages = []
-    for stage, window_size in enumerate(window_sizes, start=1):
-        component, iterations, final_max_delta = _smooth_stage(
-            residual, window_size, kernel, contrast, boundary, max_iter, tol
-        )
-        imfs.append(component)
-        residual = residual - component
-        stages.append(StageInfo(stage, window_size, iterations, final_max_delta))
-
-    return IMFResult(np.array(imfs), residual, stages, window_sizes)
+    return IMF(contrast, kernel, boundary=boundary, max_iter=max_iter, tol=tol).decompose(
+        y, window_sizes=window_sizes
+    )
 
 
 def linear_imf(y, window_sizes=None, kernel=None, boundary="wrap"):

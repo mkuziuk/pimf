@@ -12,6 +12,47 @@ def test_smooth_abs_requires_positive_h():
         SmoothAbs(-1.0)
 
 
+@pytest.mark.parametrize("H", [None, 0, -1, np.nan, np.inf, -np.inf, True, "0.2", [0.2]])
+def test_smooth_abs_rejects_invalid_H(H):
+    with pytest.raises(ValueError, match="H must be finite and positive"):
+        SmoothAbs(H=H)
+
+
+def test_smooth_abs_H_and_legacy_h_are_identical():
+    r = np.linspace(-2.0, 2.0, 101)
+    positional = SmoothAbs(0.2)
+    for contrast in [SmoothAbs(H=0.2), SmoothAbs(h=0.2)]:
+        assert contrast.H == contrast.h == 0.2
+        assert np.array_equal(contrast(r), positional(r))
+        assert np.array_equal(contrast.psi(r), positional.psi(r))
+        assert contrast.curvature() == positional.curvature()
+
+
+def test_legacy_h_assignment_updates_contrast():
+    contrast = SmoothAbs(h=0.2)
+    contrast.h = 0.4
+    expected = SmoothAbs(H=0.4)
+    r = np.linspace(-2.0, 2.0, 101)
+    assert contrast.H == contrast.h == 0.4
+    assert np.array_equal(contrast(r), expected(r))
+    assert np.array_equal(contrast.psi(r), expected.psi(r))
+    assert contrast.curvature() == expected.curvature()
+
+
+@pytest.mark.parametrize("h", [0, -1, np.nan, np.inf])
+def test_invalid_legacy_h_assignment_preserves_bandwidth(h):
+    contrast = SmoothAbs(H=0.2)
+    with pytest.raises(ValueError, match="H must be finite and positive"):
+        contrast.h = h
+    assert contrast.H == contrast.h == 0.2
+
+
+@pytest.mark.parametrize("h", [0.2, 0.3])
+def test_smooth_abs_rejects_both_aliases(h):
+    with pytest.raises(ValueError, match="only one"):
+        SmoothAbs(H=0.2, h=h)
+
+
 def test_smooth_abs_score_is_bounded():
     contrast = SmoothAbs(0.4)
     r = np.linspace(-1e6, 1e6, 10001)

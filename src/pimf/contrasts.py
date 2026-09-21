@@ -6,6 +6,8 @@ step. A contrast with a closed-form minimizer may also provide
 solve(windows, weights); the decomposition then skips gradient descent.
 """
 
+from numbers import Real
+
 import numpy as np
 
 from ._erf import SQRT_2, SQRT_2_OVER_PI, erf_approx
@@ -45,27 +47,43 @@ class Quadratic(Contrast):
 
 
 class SmoothAbs(Contrast):
-    """Smoothed absolute value: |r| convolved with a N(0, h^2) density.
+    """Smoothed absolute value: |r| convolved with a N(0, H^2) density.
 
-    rho_h(r) = r * erf(r / (sqrt(2) h)) + sqrt(2 / pi) * h * exp(-r^2 / (2 h^2))
-    psi_h(r) = erf(r / (sqrt(2) h)), bounded in [-1, 1].
+    rho_H(r) = r * erf(r / (sqrt(2) H)) + sqrt(2 / pi) * H * exp(-r^2 / (2 H^2))
+    psi_H(r) = erf(r / (sqrt(2) H)), bounded in [-1, 1].
 
-    h > 0 controls the transition from quadratic near zero to |r| in the
-    tails: smaller h is more median-like, larger h closer to the local mean.
-    h ~ 2 * noise sigma is the research-validated default choice.
+    H > 0 controls the transition from quadratic near zero to |r| in the
+    tails: smaller H is more median-like, larger H closer to the local mean.
+    H ~ 2 * noise sigma is the research-validated default choice.
     """
 
-    def __init__(self, h):
-        if h <= 0:
-            raise ValueError("h must be positive")
-        self.h = float(h)
+    def __init__(self, H=None, *, h=None):
+        if H is not None and h is not None:
+            raise ValueError("provide only one of H and h")
+        self.h = h if H is None else H
+
+    @property
+    def h(self):
+        """Writable compatibility alias for the contrast bandwidth H."""
+        return self.H
+
+    @h.setter
+    def h(self, H):
+        if (
+            isinstance(H, (bool, np.bool_))
+            or not isinstance(H, Real)
+            or not np.isfinite(H)
+            or H <= 0
+        ):
+            raise ValueError("H must be finite and positive")
+        self.H = float(H)
 
     def __call__(self, r):
         r = np.asarray(r, dtype=float)
-        return r * self.psi(r) + SQRT_2_OVER_PI * self.h * np.exp(-0.5 * (r / self.h) ** 2)
+        return r * self.psi(r) + SQRT_2_OVER_PI * self.H * np.exp(-0.5 * (r / self.H) ** 2)
 
     def psi(self, r):
-        return erf_approx(np.asarray(r, dtype=float) / (SQRT_2 * self.h))
+        return erf_approx(np.asarray(r, dtype=float) / (SQRT_2 * self.H))
 
     def curvature(self):
-        return SQRT_2_OVER_PI / self.h
+        return SQRT_2_OVER_PI / self.H

@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "pimf"
-version = "0.1.0"
+version = "0.2.0"
 description = "Intrinsic multiscale filtering (IMF) for 1-D signals: linear and robust decompositions."
 readme = "README.md"
 requires-python = ">=3.10"
@@ -25,6 +25,7 @@ dependencies = ["numpy>=1.22"]
 
 [project.urls]
 Homepage = "https://github.com/mkuziuk/pimf"
+Documentation = "https://mkuziuk.github.io/pimf/"
 Source = "https://github.com/mkuziuk/pimf"
 Issues = "https://github.com/mkuziuk/pimf/issues"
 

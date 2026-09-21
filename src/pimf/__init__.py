@@ -1,23 +1,41 @@
 """Intrinsic multiscale filtering (IMF) for 1-D signals."""
 
 from .contrasts import Contrast, Quadratic, SmoothAbs
-from .decompose import IMFResult, StageInfo, imf, linear_imf, robust_imf
-from .kernels import Kernel, SquaredTriangle
+from .decompose import IMF, IMFResult, StageInfo, imf, linear_imf, robust_imf
+from .kernels import (
+    Epanechnikov,
+    Kernel,
+    SquaredTriangle,
+    Triangle,
+    Uniform,
+    epanechnikov,
+    squared_triangle,
+    triangle,
+    uniform,
+)
 from .schedule import make_window_schedule
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"
 
 __all__ = [
     "Contrast",
+    "Epanechnikov",
+    "IMF",
     "IMFResult",
     "Kernel",
     "Quadratic",
     "SmoothAbs",
     "SquaredTriangle",
     "StageInfo",
+    "Triangle",
+    "Uniform",
     "__version__",
+    "epanechnikov",
     "imf",
     "linear_imf",
     "make_window_schedule",
     "robust_imf",
+    "squared_triangle",
+    "triangle",
+    "uniform",
 ]

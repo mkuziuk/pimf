@@ -1,0 +1,243 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="pimf documentation: linear and robust intrinsic multiscale filtering with NumPy. Kernels, contrasts, bandwidth schedules and the IMF Python API.">
+  <meta name="theme-color" content="#123fda">
+  <title>pimf · Intrinsic multiscale filtering</title>
+  <link rel="icon" href="favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+<a class="skip-link" href="#main">Skip to content</a>
+<header class="topbar">
+  <a class="brand" href="#overview"><img src="favicon.svg" alt="" width="30" height="30">pimf<span>documentation</span></a>
+  <div class="toplinks"><span class="version">0.2 development</span><a href="https://github.com/mkuziuk/pimf">GitHub <span aria-hidden="true">↗</span></a></div>
+</header>
+<div class="layout">
+  <aside class="sidebar">
+    <nav aria-label="Documentation">
+      <p class="nav-label">Start here</p>
+      <a href="#overview">Overview</a><a href="#quickstart">Install &amp; quickstart</a><a href="#results">Reading the result</a>
+      <p class="nav-label">Configure the method</p>
+      <a href="#schedule">Window schedule</a><a href="#kernels">Kernels</a><a href="#contrasts">Contrasts</a><a href="#boundaries">Boundaries &amp; convergence</a>
+      <p class="nav-label">Reference</p>
+      <a href="#api">Python API</a><a href="#custom">Custom kernels &amp; contrasts</a><a href="#migration">Migrating from functions</a><a href="#research">Research &amp; numerics</a>
+    </nav>
+    <div class="sidebar-note">Python ≥ 3.10<br>NumPy only<br>MIT license</div>
+  </aside>
+  <main id="main">
+    <section id="overview" class="intro">
+      <p class="eyebrow">A small library for one-dimensional signals</p>
+      <h1>Intrinsic multiscale filtering</h1>
+      <p class="lead">Separate a signal into progressively finer components. Choose a local weighted mean or a robust location fit, using the same decomposition API.</p>
+      <div class="formula" aria-label="The observation equals the sum of components plus the final residual">
+        <span>y</span><span>=</span><span>S<sub>1</sub> + S<sub>2</sub> + ··· + S<sub>K</sub></span><span>+</span><span>r<sub>K+1</sub></span>
+        <small>observation</small><small></small><small>components, coarse to fine</small><small></small><small>remaining residual</small>
+      </div>
+      <p>Each stage smooths the current residual and subtracts that component before the next stage. The contrast defines the local estimator; the kernel defines the sample weights. Reconstruction retains the complete observation, including noise. A denoising application must decide which components to keep.</p>
+    </section>
+    <section id="quickstart">
+      <p class="eyebrow">01 / First decomposition</p><h2>Install &amp; quickstart</h2>
+      <p>This documentation describes the <strong>0.2 development API</strong>. Install the implementation branch to use it. The current PyPI release has the original function API.</p>
+      <pre><code class="language-bash">pip install "pimf @ git+https://github.com/mkuziuk/pimf@codex/imf-object-api"</code></pre>
+      <pre><code class="language-python">import numpy as np
+from pimf import IMF
+from pimf.contrasts import SmoothAbs
+from pimf.kernels import epanechnikov
+
+t = np.arange(1000) / 1000
+rng = np.random.default_rng(0)
+y = np.sin(2 * np.pi * t) + rng.normal(0, 0.1, len(t))
+
+method = IMF(contrast=SmoothAbs(H=0.2), kernel=epanechnikov)
+result = method.decompose(y, h1=0.25, a=np.sqrt(2), k_max=8)
+
+assert result.imfs.shape == (8, 1000)
+np.testing.assert_allclose(result.reconstruction, y, rtol=0, atol=1e-12)</code></pre>
+      <p><code>IMF()</code> defaults to a quadratic contrast and the squared-triangular kernel. Reuse a configured object across signals; every call returns an independent result.</p>
+      <pre><code class="language-python">linear = IMF().decompose(y)
+second_result = method.decompose(y, h1=0.15, k_max=5)</code></pre>
+    </section>
+    <section id="results">
+      <h2>Reading the result</h2>
+      <div class="table-scroll"><table>
+        <thead><tr><th>Attribute</th><th>What it contains</th></tr></thead>
+        <tbody>
+          <tr><td><code>result.imfs</code></td><td>A <code>(K, n)</code> array of components, coarsest first.</td></tr>
+          <tr><td><code>result.residual</code></td><td>The final <code>(n,)</code> residual, separate from the component count.</td></tr>
+          <tr><td><code>result.reconstruction</code></td><td><code>imfs.sum(axis=0) + residual</code>.</td></tr>
+          <tr><td><code>result.bandwidths</code></td><td>The normalized half-width used at each stage.</td></tr>
+          <tr><td><code>result.window_sizes</code></td><td>The actual odd support sizes, in samples.</td></tr>
+          <tr><td><code>result.stages</code></td><td>Per-stage <code>stage</code>, <code>window_size</code>, <code>bandwidth</code>, <code>iterations</code>, <code>final_max_delta</code> and <code>converged</code>.</td></tr>
+        </tbody>
+      </table></div>
+      <p>A stage reaching its iteration limit still returns an estimate. Check <code>converged</code> before using its components in a numerical comparison.</p>
+      <pre><code class="language-python">unfinished = [stage.stage for stage in result.stages if not stage.converged]
+coarse_signal = result.imfs[:2].sum(axis=0)</code></pre>
+    </section>
+    <section id="schedule">
+      <p class="eyebrow">02 / Choose the scales</p><h2>Window schedule</h2>
+      <p>The data are treated as equally spaced on a unit time domain, with spacing <code>1 / len(y)</code>. A bandwidth <em>h</em> is a <strong>half-width</strong>: the neighborhood is [t − h, t + h]. It is independent of the robust contrast scale <em>H</em>.</p>
+      <div class="equation">h<sub>k+1</sub> = h<sub>k</sub> / a</div>
+      <div class="table-scroll"><table>
+        <thead><tr><th>Argument</th><th>Default</th><th>Meaning</th></tr></thead>
+        <tbody>
+          <tr><td><code>h1</code></td><td><code>0.25</code></td><td>First half-width, in <code>(0, 0.5]</code>. The default covers about half the samples.</td></tr>
+          <tr><td><code>a</code></td><td><code>sqrt(2)</code></td><td>Finite shrink factor greater than one. The paper suggests values up to two.</td></tr>
+          <tr><td><code>k_max</code></td><td><code>8</code></td><td>Maximum number of components. A positive integer, or <code>None</code> when <code>h_min</code> is supplied.</td></tr>
+          <tr><td><code>h_min</code></td><td><code>None</code></td><td>Optional minimum half-width in <code>(0, h1]</code>, inclusive.</td></tr>
+          <tr><td><code>window_sizes</code></td><td><code>None</code></td><td>Alternative explicit sequence of positive odd sample counts.</td></tr>
+        </tbody>
+      </table></div>
+      <p>With 1,000 samples, <code>h1=0.25</code> gives a 501-sample first window. A fractional sample radius uses an odd window large enough to contain the kernel support. Weights use the fractional bandwidth, not the outward-rounded support radius. Radii within 10<sup>−9</sup> samples of a positive integer snap to that integer in both the support and the weights, avoiding floating-point boundary errors. Consecutive support sizes can coincide while their weights differ.</p>
+      <p>Stop at the first applicable limit: the component cap, a next bandwidth below <code>h_min</code>, or completion of a window containing only the center sample. A center-only window is represented by size one. The actual component count can therefore be smaller than <code>k_max</code>. Eight is a library default, not a theoretical optimum.</p>
+      <pre><code class="language-python"># A fixed maximum number of scales.
+four_scales = method.decompose(y, h1=0.2, a=2, k_max=4)
+
+# Stop by bandwidth alone.
+to_minimum = method.decompose(y, k_max=None, h_min=0.02)
+
+# Reproduce a chosen integer-window experiment.
+explicit = method.decompose(y, window_sizes=[151, 75, 31])</code></pre>
+      <div class="note"><strong>Explicit windows define the entire schedule.</strong> Their kernel radius is <code>(window_size - 1) / 2</code>. Do not combine them with nondefault <code>h1</code>, <code>a</code>, <code>k_max</code> or any <code>h_min</code>. Empty, even and nonintegral window sizes raise <code>ValueError</code>.</div>
+    </section>
+    <section id="kernels">
+      <h2>Kernels</h2>
+      <p>Import a ready-to-use kernel and pass it directly to <code>IMF</code>. Kernels have compact support on [−1, 1], and the library normalizes their sampled weights to sum to one.</p>
+      <pre><code class="language-python">from pimf.kernels import epanechnikov, squared_triangle, triangle, uniform
+
+weighted_mean = IMF(kernel=epanechnikov).decompose(y)
+weights = epanechnikov.weights(31)</code></pre>
+      <div class="table-scroll"><table>
+        <thead><tr><th>Instance</th><th>Profile inside the support</th><th>Class</th></tr></thead>
+        <tbody>
+          <tr><td><code>squared_triangle</code></td><td>¾ (1 − |u|)²</td><td><code>SquaredTriangle</code></td></tr>
+          <tr><td><code>epanechnikov</code></td><td>¾ (1 − u²)</td><td><code>Epanechnikov</code></td></tr>
+          <tr><td><code>triangle</code></td><td>1 − |u|</td><td><code>Triangle</code></td></tr>
+          <tr><td><code>uniform</code></td><td>½</td><td><code>Uniform</code></td></tr>
+        </tbody>
+      </table></div>
+      <p>The classes are also available for explicit construction. The lowercase instances carry no parameters or cached signal data.</p>
+      <div class="note"><strong>A naming correction.</strong> The research paper calls ¾ (1 − |u|)² “Epanechnikov.” We name that profile <code>squared_triangle</code> and keep it as the default. <code>epanechnikov</code> denotes the classical ¾ (1 − u²) kernel.</div>
+    </section>
+    <section id="contrasts">
+      <h2>Contrasts</h2>
+      <p>A contrast determines the local location estimate at each sample. Its parameters belong to the contrast object.</p>
+      <div class="contrast-pair">
+        <article><h3><code>Quadratic()</code></h3><p>The loss is ρ(r) = r²/2. Its minimizer is the weighted local mean, computed directly without gradient descent.</p></article>
+        <article><h3><code>SmoothAbs(H)</code></h3><p>A Gaussian-smoothed absolute loss with bounded score. Smaller <em>H</em> is more median-like; larger <em>H</em> approaches a local mean.</p></article>
+      </div>
+      <pre><code class="language-python">from pimf.contrasts import Quadratic, SmoothAbs
+
+linear_method = IMF(contrast=Quadratic())
+robust_method = IMF(contrast=SmoothAbs(H=0.2))</code></pre>
+      <p><code>H</code> must be finite and positive. It has the same units as the signal values. The paper recommends a value of the same order as the uncontaminated noise standard deviation; the research examples often use <code>H = 2 * sigma</code>. The library does not estimate the noise or choose <code>H</code> automatically.</p>
+      <p>The score is <code>erf(r / (sqrt(2) * H))</code>, evaluated with the research's Abramowitz–Stegun approximation. The positive curvature bound is <code>sqrt(2 / pi) / H</code>. No lookup table is used.</p>
+    </section>
+    <section id="boundaries">
+      <h2>Boundaries &amp; convergence</h2>
+      <p><code>boundary="wrap"</code> is the default and matches the paper's periodic extension. The setting is passed to <code>numpy.pad</code>; <code>"reflect"</code> and <code>"edge"</code> also work.</p>
+      <pre><code class="language-python">careful = IMF(
+    contrast=SmoothAbs(H=0.2),
+    kernel=epanechnikov,
+    boundary="reflect",
+    max_iter=200,
+    tol=1e-8,
+)
+careful_result = careful.decompose(y, k_max=6)</code></pre>
+      <p>For contrasts without a direct solver, the library starts from each window's median and performs clipped gradient descent. Its step is <code>0.95 / contrast.curvature()</code>. An iteration stops the stage when the maximum update is at most <code>tol * (1 + max(abs(component)))</code>.</p>
+      <p><code>max_iter</code> limits optimization iterations within each stage. <code>k_max</code> limits the number of decomposition stages. If optimization reaches its limit without meeting the tolerance, the stage reports <code>converged=False</code>. Closed-form stages report <code>iterations=1</code>, <code>final_max_delta=nan</code> and <code>converged=True</code>.</p>
+    </section>
+    <section id="api">
+      <p class="eyebrow">03 / Python reference</p><h2>Python API</h2>
+      <h3><code>IMF</code></h3>
+      <pre><code>IMF(contrast=None, kernel=None, *, boundary="wrap", max_iter=60, tol=1e-6)
+
+IMF.decompose(y, *, h1=0.25, a=sqrt(2), k_max=8,
+              h_min=None, window_sizes=None) -&gt; IMFResult</code></pre>
+      <p><code>None</code> selects <code>Quadratic()</code> and <code>squared_triangle</code>. Input <code>y</code> must be nonempty, finite and one-dimensional; it is converted to floating point. The input is not modified. Constructor settings are reusable across calls. Invalid numerical settings raise <code>ValueError</code>.</p>
+      <h3><code>Kernel</code></h3>
+      <pre><code>kernel.profile(u)
+kernel.weights(window_size, *, bandwidth=None)
+kernel(window_size, *, bandwidth=None)</code></pre>
+      <p><code>profile(u)</code> returns an array of finite nonnegative values matching <code>u</code>. The base class evaluates only points inside [−1, 1], fills other weights with zero and normalizes the result. The sampled weights must have a positive sum.</p>
+      <p>Here <code>bandwidth</code> is a radius <strong>in samples</strong>, unlike the normalized half-widths passed to <code>decompose</code>. Omitting it uses the integer window radius. A one-sample window has weight one.</p>
+      <h3><code>Contrast</code></h3>
+      <pre><code>contrast(r)                      # loss rho(r)
+contrast.psi(r)                  # score rho'(r)
+contrast.curvature()             # positive global upper bound on rho''
+contrast.solve(windows, weights) # optional direct minimizer</code></pre>
+      <p>Loss and score methods must accept NumPy arrays. A direct solver receives rows of local observations and a normalized weight vector, and returns one estimate per row. Without a direct solver, supply a finite positive curvature bound for a convex differentiable contrast.</p>
+      <h3><code>IMFResult</code> and <code>StageInfo</code></h3>
+      <p>Both are small dataclasses exported from <code>pimf</code>. <code>IMFResult</code> holds the arrays and the schedule; <code>StageInfo</code> holds the diagnostics listed under <a href="#results">Reading the result</a>. The configured <code>IMF</code> never stores a signal or the last result.</p>
+    </section>
+    <section id="custom">
+      <h2>Custom kernels &amp; contrasts</h2>
+      <p>Subclass <code>Kernel</code> and define a profile. The base class handles sampling, compact support and normalization.</p>
+      <pre><code class="language-python">from pimf import Kernel
+
+class Cosine(Kernel):
+    def profile(self, u):
+        return np.cos(np.pi * u / 2)
+
+cosine_result = IMF(kernel=Cosine()).decompose(y)</code></pre>
+      <p>A custom contrast supplies its loss, score and curvature bound. This Huber example uses the general gradient descent path:</p>
+      <pre><code class="language-python">from pimf import Contrast
+
+class Huber(Contrast):
+    def __init__(self, delta):
+        if not np.isfinite(delta) or delta &lt;= 0:
+            raise ValueError("delta must be finite and positive")
+        self.delta = delta
+
+    def __call__(self, r):
+        r = np.asarray(r, dtype=float)
+        magnitude = np.abs(r)
+        return np.where(
+            magnitude &lt;= self.delta,
+            0.5 * r**2,
+            self.delta * (magnitude - 0.5 * self.delta),
+        )
+
+    def psi(self, r):
+        return np.clip(r, -self.delta, self.delta)
+
+    def curvature(self):
+        return 1.0
+
+huber_result = IMF(contrast=Huber(0.3)).decompose(y)</code></pre>
+      <p>The solver supports this contrast, but the paper's higher-order smoothness guarantees do not apply to the Huber loss unchanged. Custom profiles and contrasts should be checked against independent reference calculations.</p>
+    </section>
+    <section id="migration">
+      <h2>Migrating from functions</h2>
+      <p>The function API remains available as a small compatibility layer over the same implementation. Existing defaults still use the research integer-window schedule, with a minimum window of 31 and a size-dependent component count.</p>
+      <pre><code class="language-python">from pimf import make_window_schedule, robust_imf
+
+old_result = robust_imf(y, h=0.2)
+same_result = IMF(SmoothAbs(H=0.2)).decompose(
+    y, window_sizes=make_window_schedule(len(y))
+)
+np.testing.assert_array_equal(old_result.imfs, same_result.imfs)</code></pre>
+      <p><code>imf()</code>, <code>linear_imf()</code>, <code>robust_imf()</code> and <code>make_window_schedule()</code> remain supported. <code>SmoothAbs(0.2)</code> and <code>SmoothAbs(h=0.2)</code> remain valid; supplying both <code>H</code> and <code>h</code> raises <code>ValueError</code>.</p>
+      <div class="note"><strong>The new default schedule is different.</strong> <code>IMF().decompose(y)</code> uses up to eight exact fractional bandwidths. An integer-window schedule shrinks and rounds sample counts at each step. Use explicit windows for numerical reproduction, even when the two schedules have similar support sizes.</div>
+    </section>
+    <section id="research">
+      <h2>Research &amp; numerics</h2>
+      <p>The <a href="https://github.com/mkuziuk/imf">IMF research repository</a> contains the reference notebooks, the <a href="https://github.com/mkuziuk/imf/blob/main/IMF.pdf">paper</a> and the <a href="https://github.com/mkuziuk/imf/tree/main/experiments/solver-speed">solver benchmark</a>. This library preserves the research erf approximation and uses vectorized NumPy without application-level threading.</p>
+      <p>The benchmark compares a lookup-based research solver with QuantLet's scalar search. Its threaded speedups are not performance measurements of <code>pimf</code>. The library tests use research fixtures to check numerical agreement and reconstruction.</p>
+      <p>Reconstruction is accurate to floating-point rounding. It does not establish signal recovery quality. The usefulness of a decomposition depends on the kernel, contrast, scales and contamination model.</p>
+      <h3>Develop and verify</h3>
+      <pre><code class="language-bash">uv sync
+uv run python -m pytest
+uv run ruff check .
+uv run ruff format --check .
+uv build</code></pre>
+      <p>This site is static HTML and CSS in the repository's <code>docs/</code> directory. GitHub Pages serves it directly; no documentation build dependencies are required.</p>
+    </section>
+    <footer><span>pimf · NumPy-only intrinsic multiscale filtering</span><a href="https://github.com/mkuziuk/pimf/blob/main/LICENSE">MIT license</a><a href="#overview">Back to top ↑</a></footer>
+  </main>
+</div>
+</body>
+</html>

@@ -2,6 +2,15 @@ import numpy as np
 import pytest
 
 from pimf import Kernel, SquaredTriangle
+from pimf.kernels import (
+    Epanechnikov,
+    Triangle,
+    Uniform,
+    epanechnikov,
+    squared_triangle,
+    triangle,
+    uniform,
+)
 
 
 def research_epanechnikov_weights(window_size):
@@ -67,3 +76,88 @@ def test_negative_profile_raises():
 
     with pytest.raises(ValueError):
         Bad().weights(5)
+
+
+@pytest.mark.parametrize("window_size", [0, -1, 2, 3.5, np.nan, np.inf, True, "5"])
+def test_invalid_window_size_raises(window_size):
+    with pytest.raises(ValueError, match="positive odd integer"):
+        squared_triangle.weights(window_size)
+
+
+@pytest.mark.parametrize("window_size", [5, 5.0, np.int64(5)])
+def test_integral_window_size(window_size):
+    assert np.array_equal(squared_triangle.weights(window_size), research_epanechnikov_weights(5))
+
+
+@pytest.mark.parametrize("bandwidth", [0, -1, np.nan, np.inf, True, "2"])
+def test_invalid_bandwidth_raises(bandwidth):
+    with pytest.raises(ValueError, match="bandwidth"):
+        squared_triangle.weights(5, bandwidth=bandwidth)
+
+
+@pytest.mark.parametrize("profile", [np.nan, np.inf, -0.1, 0.0])
+def test_invalid_profile_values_raise(profile):
+    class Bad(Kernel):
+        def profile(self, u):
+            return np.full_like(u, profile)
+
+    with pytest.raises(ValueError):
+        Bad().weights(5)
+
+
+def test_profile_shape_must_match_offsets():
+    class Bad(Kernel):
+        def profile(self, u):
+            return np.ones((len(u), 1))
+
+    with pytest.raises(ValueError, match="matching u"):
+        Bad().weights(5)
+
+
+@pytest.mark.parametrize(
+    ("kernel", "kernel_type"),
+    [
+        (squared_triangle, SquaredTriangle),
+        (epanechnikov, Epanechnikov),
+        (triangle, Triangle),
+        (uniform, Uniform),
+    ],
+)
+def test_predefined_kernels(kernel, kernel_type):
+    assert isinstance(kernel, kernel_type)
+    assert vars(kernel) == {}
+    assert np.array_equal(kernel.weights(5), kernel_type().weights(5))
+    assert np.array_equal(kernel.weights(1), [1.0])
+    assert np.array_equal(kernel.weights(1, bandwidth=0.25), [1.0])
+
+
+@pytest.mark.parametrize("kernel", [squared_triangle, epanechnikov, triangle, uniform])
+def test_fractional_bandwidth_preserves_sample_radius(kernel):
+    u = np.arange(-3, 4) / 2.5
+    expected = np.asarray(kernel.profile(u), dtype=float)
+    expected[np.abs(u) > 1] = 0.0
+    expected /= expected.sum()
+    assert np.array_equal(kernel.weights(7, bandwidth=2.5), expected)
+    assert np.array_equal(kernel(7, bandwidth=2.5), expected)
+
+
+def test_custom_profile_only_receives_supported_offsets():
+    class SupportedTriangle(Kernel):
+        def profile(self, u):
+            assert np.all(np.abs(u) <= 1)
+            return 1.0 - np.abs(u)
+
+    assert np.array_equal(
+        SupportedTriangle().weights(7, bandwidth=2.5), triangle.weights(7, bandwidth=2.5)
+    )
+
+
+def test_predefined_profile_formulas():
+    u = np.array([-1.5, -1.0, -0.5, 0.0, 0.5, 1.0, 1.5])
+    np.testing.assert_allclose(
+        epanechnikov.profile(u), [0, 0, 0.5625, 0.75, 0.5625, 0, 0], atol=0, rtol=1e-15
+    )
+    np.testing.assert_allclose(triangle.profile(u), [0, 0, 0.5, 1, 0.5, 0, 0], atol=0, rtol=1e-15)
+    np.testing.assert_allclose(
+        uniform.profile(u), [0, 0.5, 0.5, 0.5, 0.5, 0.5, 0], atol=0, rtol=1e-15
+    )
