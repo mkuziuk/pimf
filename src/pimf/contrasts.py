@@ -57,18 +57,7 @@ class SmoothAbs(Contrast):
     H ~ 2 * noise sigma is the research-validated default choice.
     """
 
-    def __init__(self, H=None, *, h=None):
-        if H is not None and h is not None:
-            raise ValueError("provide only one of H and h")
-        self.h = h if H is None else H
-
-    @property
-    def h(self):
-        """Writable compatibility alias for the contrast bandwidth H."""
-        return self.H
-
-    @h.setter
-    def h(self, H):
+    def __init__(self, H):
         if (
             isinstance(H, (bool, np.bool_))
             or not isinstance(H, Real)

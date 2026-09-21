@@ -15,9 +15,6 @@ The object API below is available in the 0.2 development branch:
 pip install "pimf @ git+https://github.com/mkuziuk/pimf@codex/imf-object-api"
 ```
 
-The existing PyPI release can be installed with `pip install pimf`; it uses the
-original function API.
-
 ## Quickstart
 
 ```python
@@ -46,10 +43,6 @@ by `a`. Set `h_min` to stop at a minimum bandwidth, or supply explicit odd
 
 Predefined kernels are `squared_triangle`, `epanechnikov`, `triangle` and
 `uniform`. Custom `Kernel` and `Contrast` subclasses remain supported.
-
-The original `imf`, `linear_imf`, `robust_imf`, `make_window_schedule` and
-`SmoothAbs(h=...)` interfaces retain their numerical behavior through the same
-implementation. See the [migration notes](https://mkuziuk.github.io/pimf/#migration).
 
 ## Development
 

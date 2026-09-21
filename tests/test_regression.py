@@ -2,7 +2,7 @@
 
 Setup mirrors experiments/robust-gradient-descent/robust_gradient_descent_imf.ipynb:
 n=1000, sigma=0.1, contamination p=0.2 scale=2.0 (one-sided), seed 777,
-windows [151, 107, 75, 53, 37, 27, 19, 13], robust h = 2 * sigma = 0.2
+windows [151, 107, 75, 53, 37, 27, 19, 13], robust H = 2 * sigma = 0.2
 (the winner of the notebook's H grid).
 
 The metric expectations follow the notebook's recorded results: the robust
@@ -15,7 +15,7 @@ import numpy as np
 import pytest
 from conftest import gen_signal, generate_observation
 
-from pimf import linear_imf, robust_imf
+from pimf import IMF, SmoothAbs
 
 WINDOW_SIZES = [151, 107, 75, 53, 37, 27, 19, 13]
 SIGMA = 0.1
@@ -37,10 +37,10 @@ def signals():
 def decompositions(signals):
     x_clean, y_noisy = signals
     return {
-        "linear_noisy": linear_imf(y_noisy, window_sizes=WINDOW_SIZES),
-        "linear_clean": linear_imf(x_clean, window_sizes=WINDOW_SIZES),
-        "robust_noisy": robust_imf(y_noisy, H, window_sizes=WINDOW_SIZES),
-        "robust_clean": robust_imf(x_clean, H, window_sizes=WINDOW_SIZES),
+        "linear_noisy": IMF().decompose(y_noisy, window_sizes=WINDOW_SIZES),
+        "linear_clean": IMF().decompose(x_clean, window_sizes=WINDOW_SIZES),
+        "robust_noisy": IMF(SmoothAbs(H=H)).decompose(y_noisy, window_sizes=WINDOW_SIZES),
+        "robust_clean": IMF(SmoothAbs(H=H)).decompose(x_clean, window_sizes=WINDOW_SIZES),
     }
 
 

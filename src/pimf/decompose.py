@@ -1,15 +1,14 @@
 """Intrinsic multiscale filtering: the decomposition driver."""
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from numbers import Integral, Real
 
 import numpy as np
 from numpy.lib.stride_tricks import sliding_window_view
 
 from ._erf import SQRT_2
-from .contrasts import Quadratic, SmoothAbs
+from .contrasts import Quadratic
 from .kernels import squared_triangle
-from .schedule import make_window_schedule
 
 
 @dataclass(frozen=True)
@@ -21,8 +20,8 @@ class StageInfo:
     window_size: int
     iterations: int
     final_max_delta: float
-    bandwidth: float | None = None
-    converged: bool = True
+    bandwidth: float
+    converged: bool
 
 
 @dataclass
@@ -33,7 +32,7 @@ class IMFResult:
     residual: np.ndarray
     stages: list[StageInfo]
     window_sizes: list[int]
-    bandwidths: list[float] = field(default_factory=list)
+    bandwidths: list[float]
 
     @property
     def reconstruction(self):
@@ -195,33 +194,3 @@ class IMF:
             )
             stages.append(StageInfo(stage, size, iterations, delta, h, bool(converged)))
         return IMFResult(np.stack(components), residual, stages, window_sizes, bandwidths)
-
-
-def imf(y, window_sizes=None, contrast=None, kernel=None, boundary="wrap", max_iter=60, tol=1e-6):
-    """Compatibility function retaining the original integer-window schedule."""
-    y = np.asarray(y, dtype=float)
-    if y.ndim != 1 or y.size == 0:
-        raise ValueError("y must be a nonempty one-dimensional signal")
-    if window_sizes is None:
-        window_sizes = make_window_schedule(len(y))
-    return IMF(contrast, kernel, boundary=boundary, max_iter=max_iter, tol=tol).decompose(
-        y, window_sizes=window_sizes
-    )
-
-
-def linear_imf(y, window_sizes=None, kernel=None, boundary="wrap"):
-    """imf() with the Quadratic contrast: the linear (weighted local mean) IMF."""
-    return imf(y, window_sizes=window_sizes, contrast=Quadratic(), kernel=kernel, boundary=boundary)
-
-
-def robust_imf(y, h, window_sizes=None, kernel=None, boundary="wrap", max_iter=60, tol=1e-6):
-    """imf() with the SmoothAbs(h) contrast; h ~ 2 * noise sigma works well."""
-    return imf(
-        y,
-        window_sizes=window_sizes,
-        contrast=SmoothAbs(h),
-        kernel=kernel,
-        boundary=boundary,
-        max_iter=max_iter,
-        tol=tol,
-    )

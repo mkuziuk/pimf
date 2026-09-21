@@ -23,7 +23,7 @@
       <p class="nav-label">Configure the method</p>
       <a href="#schedule">Window schedule</a><a href="#kernels">Kernels</a><a href="#contrasts">Contrasts</a><a href="#boundaries">Boundaries &amp; convergence</a>
       <p class="nav-label">Reference</p>
-      <a href="#api">Python API</a><a href="#custom">Custom kernels &amp; contrasts</a><a href="#migration">Migrating from functions</a>
+      <a href="#api">Python API</a><a href="#custom">Custom kernels &amp; contrasts</a>
     </nav>
     <div class="sidebar-note">Python ≥ 3.10<br>NumPy only<br>MIT license</div>
   </aside>
@@ -217,19 +217,6 @@ class Huber(Contrast):
         return 1.0
 
 huber_result = IMF(contrast=Huber(0.3)).decompose(y)</code></pre>
-    </section>
-    <section id="migration">
-      <h2>Migrating from functions</h2>
-      <p>Existing functions keep their original window schedule. To get the same results with an <code>IMF</code> object, pass that schedule explicitly:</p>
-      <pre><code class="language-python">from pimf import make_window_schedule, robust_imf
-
-old_result = robust_imf(y, h=0.2)
-same_result = IMF(SmoothAbs(H=0.2)).decompose(
-    y, window_sizes=make_window_schedule(len(y))
-)
-np.testing.assert_array_equal(old_result.imfs, same_result.imfs)</code></pre>
-      <p><code>imf()</code>, <code>linear_imf()</code>, <code>robust_imf()</code> and <code>make_window_schedule()</code> remain supported. <code>SmoothAbs(0.2)</code> and <code>SmoothAbs(h=0.2)</code> remain valid; supplying both <code>H</code> and <code>h</code> raises <code>ValueError</code>.</p>
-      <p>The new default uses up to eight fractional bandwidths. The original functions shrink rounded integer windows toward a 31-sample minimum, or use one smaller window for short signals. Their component count depends on signal length.</p>
     </section>
     <footer><span>pimf · NumPy-only intrinsic multiscale filtering</span><a href="https://github.com/mkuziuk/pimf/blob/main/LICENSE">MIT license</a><a href="#overview">Back to top ↑</a></footer>
   </main>

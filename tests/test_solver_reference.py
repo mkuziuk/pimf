@@ -3,14 +3,19 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from pimf import IMF, SmoothAbs, make_window_schedule
+from pimf import IMF, SmoothAbs
 from pimf.kernels import epanechnikov, squared_triangle
 
 
 @pytest.mark.parametrize(
     ("case", "H", "kernel", "schedule"),
     [
-        ("your_gd_1000", 0.4, squared_triangle, {"window_sizes": make_window_schedule(1000)}),
+        (
+            "your_gd_1000",
+            0.4,
+            squared_triangle,
+            {"window_sizes": [501, 355, 251, 177, 125, 89, 63, 45, 31]},
+        ),
         ("quantlet_zero_2000", 1.0, epanechnikov, {"h1": 0.2, "k_max": 8}),
     ],
 )

@@ -2,7 +2,7 @@ import numpy as np
 import pytest
 from numpy.lib.stride_tricks import sliding_window_view
 
-from pimf import Kernel, Quadratic, SmoothAbs, linear_imf, robust_imf
+from pimf import Kernel, Quadratic, SmoothAbs
 from pimf.decompose import IMF
 from pimf.kernels import epanechnikov, squared_triangle, triangle, uniform
 
@@ -71,22 +71,13 @@ def test_inclusive_minimum_survives_geometric_roundoff():
 
 
 @pytest.mark.parametrize("contrast", [Quadratic(), SmoothAbs(H=0.2)])
-def test_explicit_windows_preserve_legacy_results(contrast):
+def test_explicit_windows_define_the_schedule(contrast):
     y = np.random.default_rng(777).normal(size=64)
     windows = [31, 15, 7]
     result = IMF(contrast).decompose(y, window_sizes=windows)
-    legacy = (
-        linear_imf(y, window_sizes=windows)
-        if isinstance(contrast, Quadratic)
-        else robust_imf(y, h=0.2, window_sizes=windows)
-    )
-    assert np.array_equal(result.imfs, legacy.imfs)
-    assert np.array_equal(result.residual, legacy.residual)
     assert result.window_sizes == windows
     assert result.bandwidths == [15 / 64, 7 / 64, 3 / 64]
-    assert [stage.iterations for stage in result.stages] == [
-        stage.iterations for stage in legacy.stages
-    ]
+    assert result.imfs.shape == (len(windows), len(y))
 
 
 @pytest.mark.parametrize("kernel", [squared_triangle, epanechnikov, triangle, uniform])
@@ -97,7 +88,7 @@ def test_predefined_kernel_instances_control_the_fit(kernel):
     assert np.array_equal(result.imfs[0], expected)
 
 
-def test_legacy_profile_subclass_supports_fractional_bandwidths():
+def test_custom_profile_subclass_supports_fractional_bandwidths():
     class CustomTriangle(Kernel):
         def profile(self, u):
             return 1.0 - np.abs(u)
@@ -106,17 +97,6 @@ def test_legacy_profile_subclass_supports_fractional_bandwidths():
     custom = IMF(kernel=CustomTriangle()).decompose(y, k_max=2)
     expected = IMF(kernel=triangle).decompose(y, k_max=2)
     assert np.array_equal(custom.imfs, expected.imfs)
-
-
-def test_legacy_weights_override_preserved_for_explicit_windows():
-    class CustomWeights(Kernel):
-        def weights(self, window_size):
-            return np.ones(window_size) / window_size
-
-    y = np.arange(16.0)
-    result = IMF(kernel=CustomWeights()).decompose(y, window_sizes=[5])
-    expected = sliding_window_view(np.pad(y, 2, mode="wrap"), 5) @ (np.ones(5) / 5)
-    assert np.array_equal(result.imfs[0], expected)
 
 
 def test_configuration_reuse_returns_independent_results():
