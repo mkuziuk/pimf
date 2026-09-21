@@ -32,7 +32,6 @@ a:focus-visible { outline: 3px solid var(--blue); outline-offset: 4px; border-ra
 main { padding: 3rem 4rem 1.5rem; min-width: 0; border-left: 1px solid var(--line); }
 section { max-width: 870px; margin: 0 auto; padding: 2.5rem 0; border-top: 1px solid var(--line); scroll-margin-top: 1rem; }
 section.intro { border: none; padding-top: 0; }
-.eyebrow { color: var(--blue); font-size: .875rem; font-weight: 650; margin: 0 0 .9rem; }
 h1, h2, h3 { line-height: 1.25; color: #102030; }
 h1 { font-size: clamp(2rem, 3.4vw, 3.1rem); letter-spacing: -.045em; max-width: 680px; margin: 0 0 1.15rem; font-weight: 720; }
 h2 { font-size: 1.75rem; letter-spacing: -.025em; margin: 0 0 1rem; }
@@ -41,7 +40,7 @@ p { margin: .9rem 0; }
 .lead { font-size: 1.15rem; line-height: 1.7; color: #435565; max-width: 740px; }
 code { font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace; font-size: .88em; background: var(--wash); padding: .15em .3em; border-radius: 3px; overflow-wrap: anywhere; }
 h3 code { color: var(--blue); }
-pre { margin: 1.25rem 0; padding: 1.4rem 1.5rem; overflow-x: auto; border-radius: 6px; background: #112434; color: #e5eef9; font-size: .9rem; line-height: 1.75; tab-size: 4; }
+pre { margin: 1.25rem 0; padding: 1.2rem 1.4rem; overflow-x: auto; border: 1px solid var(--line); border-radius: 5px; background: #f7f9fb; color: var(--ink); font-size: .9rem; line-height: 1.75; tab-size: 4; }
 pre code { padding: 0; background: none; color: inherit; font-size: inherit; overflow-wrap: normal; }
 .formula { display: grid; grid-template-columns: auto auto 1fr auto auto; gap: .4rem 1rem; align-items: center; text-align: center; padding: 1.5rem; margin: 2rem 0; border-top: 2px solid var(--blue); border-bottom: 1px solid var(--line); background: #f7f9ff; }
 .formula > span { font-family: Georgia, serif; font-size: 1.35rem; }
@@ -53,8 +52,6 @@ th { color: #33475b; font-size: .875rem; font-weight: 650; background: var(--was
 th, td { padding: .8rem .9rem; vertical-align: top; border-bottom: 1px solid var(--line); }
 td:first-child { min-width: 135px; }
 td code { white-space: nowrap; }
-.note { margin: 1.5rem 0; padding: 1rem 1.25rem; border-left: 3px solid var(--blue); background: #f2f5ff; color: #344662; }
-.note strong { display: block; margin-bottom: .3rem; font-weight: 650; }
 .contrast-pair { display: grid; grid-template-columns: 1fr 1fr; gap: 1.5rem; margin: 1.5rem 0; }
 .contrast-pair article { padding: 0 1.25rem; border-left: 2px solid var(--line); }
 .contrast-pair h3 { margin-top: 0; }

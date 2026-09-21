@@ -5,8 +5,7 @@ and contrast once, then decompose signals into coarse-to-fine components and a
 residual. NumPy is the only runtime dependency. Requires Python 3.10 or later.
 
 [Documentation](https://mkuziuk.github.io/pimf/) ·
-[API reference](https://mkuziuk.github.io/pimf/#api) ·
-[Research](https://github.com/mkuziuk/imf)
+[API reference](https://mkuziuk.github.io/pimf/#api)
 
 ## Install
 
@@ -46,10 +45,7 @@ by `a`. Set `h_min` to stop at a minimum bandwidth, or supply explicit odd
 `window_sizes` to reproduce an integer-window experiment.
 
 Predefined kernels are `squared_triangle`, `epanechnikov`, `triangle` and
-`uniform`. The research paper calls the squared-triangular profile
-`0.75 * (1 - abs(u))**2` "Epanechnikov"; this library reserves `epanechnikov`
-for the classical `0.75 * (1 - u**2)` profile. Custom `Kernel` and `Contrast`
-subclasses remain supported.
+`uniform`. Custom `Kernel` and `Contrast` subclasses remain supported.
 
 The original `imf`, `linear_imf`, `robust_imf`, `make_window_schedule` and
 `SmoothAbs(h=...)` interfaces retain their numerical behavior through the same
