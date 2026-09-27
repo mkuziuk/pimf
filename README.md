@@ -7,3 +7,10 @@ predefined or custom kernels and contrasts, and control window sizes and the
 number of components.
 
 [Documentation and examples](https://mkuziuk.github.io/pimf/)
+
+In version 0.4.0, `SmoothAbs(H)` uses a precomputed uniform-grid lookup for
+faster robust fits. Use `SmoothAbs(H, lookup=False)` to reproduce the previous
+direct-evaluation path. Lookup results are numerically close, but need not be
+bit-for-bit identical to earlier releases.
+
+[Release notes](CHANGELOG.md)

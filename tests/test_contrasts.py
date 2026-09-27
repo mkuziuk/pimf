@@ -17,11 +17,12 @@ def test_smooth_abs_score_is_bounded():
     assert np.all(np.abs(contrast.psi(r)) <= 1.0)
 
 
-def test_smooth_abs_symmetry():
-    contrast = SmoothAbs(0.4)
+@pytest.mark.parametrize("lookup", [False, True])
+def test_smooth_abs_symmetry(lookup):
+    contrast = SmoothAbs(0.4, lookup=lookup)
     r = np.linspace(0.0, 10.0, 1001)
-    assert np.array_equal(contrast.psi(-r), -contrast.psi(r))
-    assert np.allclose(contrast(-r), contrast(r), atol=1e-15)
+    np.testing.assert_allclose(contrast.psi(-r), -contrast.psi(r), rtol=0, atol=2e-15)
+    np.testing.assert_allclose(contrast(-r), contrast(r), rtol=0, atol=2e-15)
 
 
 def test_smooth_abs_at_zero():
@@ -55,7 +56,7 @@ def test_quadratic_solve_is_weighted_mean():
     assert np.array_equal(Quadratic().solve(windows, weights), windows @ weights)
 
 
-@pytest.mark.parametrize("contrast", [Quadratic(), SmoothAbs(0.5)])
+@pytest.mark.parametrize("contrast", [Quadratic(), SmoothAbs(0.5, lookup=False)])
 def test_psi_is_derivative_of_rho(contrast):
     # Template consistency check for any contrast implementation.
     r = np.linspace(-3.0, 3.0, 61)

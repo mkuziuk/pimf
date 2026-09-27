@@ -21,7 +21,9 @@ https://github.com/mkuziuk/imf into a small NumPy-only library.
 - NumPy is the only runtime dependency. Never add scipy, pandas, numba, etc.
 - Numerics must reproduce the research notebooks. Keep `erf_approx`
   (Abramowitz–Stegun 7.1.26); never swap in `scipy.special.erf` or
-  `math.erf`; no lookup grids.
+  `math.erf`. `SmoothAbs` uses the research 4097-point lookup grid by default,
+  with uniform arithmetic indexing. Preserve `lookup=False` for direct
+  evaluation and its research regression values.
 - Window sizes are always odd; raise `ValueError` otherwise.
 - Boundary default is `"wrap"` (the setting the linear-operator theory
   assumes); it is passed straight to `np.pad`, so `"reflect"` and `"edge"`

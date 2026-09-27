@@ -13,7 +13,7 @@
 <a class="skip-link" href="#main">Skip to content</a>
 <header class="topbar">
   <a class="brand" href="#overview"><img src="favicon.svg" alt="" width="30" height="30">pimf<span>documentation</span></a>
-  <div class="toplinks"><span class="version">0.3.0</span><a href="https://github.com/mkuziuk/pimf">GitHub <span aria-hidden="true">↗</span></a></div>
+  <div class="toplinks"><span class="version">0.4.0</span><a href="https://github.com/mkuziuk/pimf">GitHub <span aria-hidden="true">↗</span></a></div>
 </header>
 <div class="layout">
   <aside class="sidebar">
@@ -129,6 +129,8 @@ weights = epanechnikov.weights(31)</code></pre>
 linear_method = IMF(contrast=Quadratic())
 robust_method = IMF(contrast=SmoothAbs(H=0.2))</code></pre>
       <p><code>H</code> must be finite and positive, in the same units as your sample values. For noise with standard deviation <code>0.1</code>, <code>H=0.2</code> is a starting point. Unlike <code>h1</code>, it changes outlier sensitivity, not window size.</p>
+      <h3>Lookup evaluation</h3>
+      <p>By default, <code>SmoothAbs(H)</code> interpolates precomputed values on a uniform grid to approximate the loss and score. Results can differ slightly from direct evaluation. Use <code>SmoothAbs(H, lookup=False)</code> to calculate the functions directly.</p>
     </section>
     <section id="boundaries">
       <h2>Boundaries &amp; convergence</h2>
@@ -181,7 +183,10 @@ kernel(window_size, *, bandwidth=None)</code></pre>
       <p><code>profile(u)</code> returns finite nonnegative values with the same shape as <code>u</code>. Weights outside [−1, 1] are zero; the remaining weights are normalized and must have a positive sum.</p>
       <p>Here <code>bandwidth</code> is a radius <strong>in samples</strong>, unlike the normalized half-widths passed to <code>decompose</code>. Omitting it uses the integer window radius. A one-sample window has weight one.</p>
       <h3><code>Contrast</code></h3>
-      <pre><code>contrast(r)                      # loss rho(r)
+      <pre><code>Quadratic()
+SmoothAbs(H, *, lookup=True)
+
+contrast(r)                      # loss rho(r)
 contrast.psi(r)                  # score rho'(r)
 contrast.curvature()             # positive global upper bound on rho''
 contrast.solve(windows, weights) # optional direct minimizer</code></pre>
