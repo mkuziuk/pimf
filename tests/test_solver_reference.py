@@ -20,11 +20,12 @@ from pimf.kernels import epanechnikov, squared_triangle
     ],
 )
 @pytest.mark.parametrize("workers", [1, 4])
-def test_research_scalar_solver_reference(case, H, kernel, schedule, workers):
+@pytest.mark.parametrize("lookup", [False, True])
+def test_research_scalar_solver_reference(case, H, kernel, schedule, workers, lookup):
     with np.load(Path(__file__).parent / "data" / "solver_reference.npz") as fixture:
         y = fixture[case + "_y"]
         expected = fixture[case + "_reference"]
-    result = IMF(SmoothAbs(H), kernel, workers=workers).decompose(y, **schedule)
+    result = IMF(SmoothAbs(H, lookup=lookup), kernel, workers=workers).decompose(y, **schedule)
     np.testing.assert_allclose(result.imfs, expected, rtol=0, atol=2e-6)
     np.testing.assert_allclose(result.reconstruction, y, rtol=0, atol=1e-12)
     assert all(stage.converged for stage in result.stages)
