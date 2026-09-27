@@ -35,7 +35,10 @@ def test_lookup_matches_research_score_and_loss(reference, H):
 
 def test_direct_evaluation_matches_research(reference):
     contrast = SmoothAbs(1.0, lookup=False)
-    assert np.array_equal(contrast.psi(reference["z"]), reference["direct_score"])
+    # The saved fixture crosses CPU architectures and NumPy math implementations.
+    np.testing.assert_allclose(
+        contrast.psi(reference["z"]), reference["direct_score"], rtol=0, atol=1e-15
+    )
     np.testing.assert_allclose(
         contrast(reference["z"]), reference["direct_rho"], rtol=0, atol=1e-15
     )
