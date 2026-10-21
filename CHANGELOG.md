@@ -10,11 +10,11 @@
   `SmoothAbs.psi` and `psi_prime` bit for bit. Weighted sums keep NumPy's
   per-row pairwise reduction, so results stay bit-identical across worker
   counts.
-- A small Newton step first evaluates the score at its candidate. A row that
-  finishes there reports that score, so the final pass covers only the
-  remaining rows. Lookup scores are nonincreasing as computed, so finite
-  positional probes whose sign this score or the score at the current
-  estimate already fixes are skipped.
+- With lookup scores, a small Newton step first evaluates the score at its
+  candidate. A row that finishes there reports that score, so the final pass
+  covers only the remaining rows. Lookup scores are nonincreasing as
+  computed, so finite positional probes whose sign this score or the score at
+  the current estimate already fixes are skipped.
 - Custom contrasts and `lookup=False` keep 0.5.0's evaluation calls, including
   both probes, so their score dtypes and memory layouts reduce as before.
 - Newton returns the same roots and diagnostics as 0.5.0, bit for bit, on the
