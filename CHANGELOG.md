@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.5.0
 
 - Add `IMF(on_unconverged="warn" | "raise" | "ignore")`, defaulting to one
   `RuntimeWarning` per capped stage with unfinished windows. Messages include
