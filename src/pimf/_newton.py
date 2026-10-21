@@ -196,9 +196,9 @@ def _newton_fit_windows(windows, weights, contrast, max_iter, tol):
                     left, right = cs - epsilon, cs + epsilon
                     if lookup:
                         at_candidate = evaluate(probe_rows, cs)[0]
-                        # Lookup scores are nonincreasing as computed (the table differences
-                        # are exact), so score(x) or score(candidate) fixes the sign of a
-                        # finite probe beyond them.
+                        # Lookup scores are nonincreasing as computed (the table steps are
+                        # exact and nonnegative), so score(x) or score(candidate) fixes the
+                        # sign of a finite probe beyond them.
                         left_score = np.where(at_candidate > 0, at_candidate, ss)
                         right_score = np.where(at_candidate < 0, at_candidate, ss)
                         known_left = (at_candidate > 0) | ((ss > 0) & (left <= xs))

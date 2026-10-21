@@ -1,4 +1,5 @@
 import warnings
+from fractions import Fraction
 from pathlib import Path
 
 import numpy as np
@@ -7,6 +8,7 @@ from numpy.lib.stride_tricks import sliding_window_view
 
 from pimf import IMF, Contrast, Quadratic, SmoothAbs, squared_triangle, triangle, uniform
 from pimf._newton import _newton_fit_windows
+from pimf.contrasts import _SCORE, _SCORE_DELTA
 from pimf.decompose import _gd_fit_windows
 
 
@@ -684,6 +686,16 @@ def test_outlier_magnitude_sweep_matches_independent_bisection(reference, size, 
     )
 
 
+def test_lookup_table_steps_are_exact_and_nonnegative():
+    # Probe skipping relies on lookup scores being nonincreasing as computed.
+    assert np.all(_SCORE_DELTA >= 0)
+    exact = [
+        Fraction(a) + Fraction(d) == Fraction(b)
+        for a, d, b in zip(_SCORE[:-1], _SCORE_DELTA[:-1], _SCORE[1:], strict=True)
+    ]
+    assert all(exact)
+
+
 class GenericSmoothAbs(SmoothAbs):
     """SmoothAbs evaluated through the generic psi and psi_prime path."""
 
@@ -776,6 +788,7 @@ def test_overflowing_probes_and_8H_match_generic_path():
     cases = [
         (np.array([[0, 0, big, big, big, np.inf]]), np.array([0.7, 0.3, 0.1, 0.1, 0.9, 1.0]), 0.2),
         (np.array([[-big, big, 0.0]]), np.array([1.0, 2.0, 1.0]), 2.5e307),
+        (np.array([[-np.inf, -big, -1.7976931346825464e308]]), np.array([1.0, 2.0, 2.0]), 1e296),
     ]
     for windows, weights, H in cases:
         assert_same_fit(
