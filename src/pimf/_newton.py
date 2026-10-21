@@ -35,8 +35,9 @@ def _newton_fit_windows(windows, weights, contrast, max_iter, tol):
     reduces the step to less than half the step before last. Wide brackets
     bisect float64 ranks to bound the number of halvings across extreme
     outliers. Small steps need a positional bracket at candidate +- epsilon.
-    Probes whose sign the scores at the estimate or the candidate already fix
-    are not evaluated; a row finishing there reports the candidate's score.
+    For SmoothAbs lookup scores, probes whose sign the scores at the estimate or
+    the candidate already fix are skipped. A row finishing at a small step
+    reports the candidate's score.
     Flat zero intervals use the midpoint of their two boundaries, each located
     by bisection within the same cap.
     """
@@ -51,9 +52,10 @@ def _newton_fit_windows(windows, weights, contrast, max_iter, tol):
     block = max(1, _BLOCK_SAMPLES // windows.shape[1])
     lookup = type(contrast) is SmoothAbs and contrast.lookup
     if lookup:
-        # Dividing by an exact H / 256 gives SmoothAbs's 256 * (r / H) without rounding.
+        # Dividing by an exact H / 256 gives SmoothAbs's 256 * (r / H) without rounding;
+        # the zero-slope padding below needs a finite 8H.
         divisor = contrast.H / 256
-        lookup = divisor * 256 == contrast.H
+        lookup = divisor * 256 == contrast.H and np.isfinite(8 * contrast.H)
     if lookup:
         with np.errstate(over="ignore"):
             slope_table = (256.0 * _PADDED_DELTA) / contrast.H
@@ -191,12 +193,15 @@ def _newton_fit_windows(windows, weights, contrast, max_iter, tol):
                     epsilon = tol * (1.0 + np.abs(cs))
                     left, right = cs - epsilon, cs + epsilon
                     at_candidate = evaluate(probe_rows, cs)[0]
-                    # A nonincreasing score keeps the sign of score(x) or score(candidate)
-                    # at a probe beyond them.
+                    # Lookup scores are nonincreasing as computed (the table differences
+                    # are exact), so score(x) or score(candidate) fixes the sign of a
+                    # finite probe beyond them. Other scores can wiggle by rounding.
                     left_score = np.where(at_candidate > 0, at_candidate, ss)
                     right_score = np.where(at_candidate < 0, at_candidate, ss)
-                    probe_left = ~((at_candidate > 0) | ((ss > 0) & (left <= xs)))
-                    probe_right = ~((at_candidate < 0) | ((ss < 0) & (right >= xs)))
+                    known_left = (at_candidate > 0) | ((ss > 0) & (left <= xs))
+                    known_right = (at_candidate < 0) | ((ss < 0) & (right >= xs))
+                    probe_left = ~(lookup & known_left & np.isfinite(left))
+                    probe_right = ~(lookup & known_right & np.isfinite(right))
                     probes = evaluate(
                         np.concatenate((probe_rows[probe_left], probe_rows[probe_right])),
                         np.concatenate((left[probe_left], right[probe_right])),

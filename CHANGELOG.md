@@ -10,15 +10,13 @@
   `SmoothAbs.psi` and `psi_prime` bit for bit. Weighted sums keep NumPy's
   per-row pairwise reduction, so results stay bit-identical across worker
   counts.
-- A small Newton step first evaluates the score at its candidate. Positional
-  probes whose sign this score or the score at the current estimate already
-  fixes are skipped. A row that finishes at the candidate reports that score,
-  so the final pass covers only the remaining rows.
+- A small Newton step first evaluates the score at its candidate. A row that
+  finishes there reports that score, so the final pass covers only the
+  remaining rows. Lookup scores are nonincreasing as computed, so finite
+  positional probes whose sign this score or the score at the current
+  estimate already fixes are skipped. Other contrasts evaluate both probes.
 - Newton returns the same roots and diagnostics as 0.5.0, bit for bit, on the
-  reference fixtures and in randomized stress tests. Skipped probes assume a
-  nonincreasing computed score. At tolerances near machine precision, rounding
-  can break that assumption, and a root can then move by a few tolerances to
-  another sign change.
+  reference fixtures and in randomized stress tests.
 - GD results are unchanged.
 - Add `benchmarks/newton_stages.py`, which times each Newton stage and also
   runs against an installed 0.5.0.

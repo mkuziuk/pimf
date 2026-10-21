@@ -758,6 +758,32 @@ def test_residuals_just_beyond_8H_have_zero_slope():
     )
 
 
+def test_direct_scores_evaluate_both_probes():
+    # erf_approx can wiggle by rounding across a probe interval when H is large.
+    windows = np.array([[-731.7543616953625, 998.8702915620365]])
+    weights = np.array([1.0757267432751028, 0.7886655183662474])
+    contrast = SmoothAbs(1e4, lookup=False)
+    for max_iter in (4, 100):
+        roots, iterations, _, unfinished, _, _ = _newton_fit_windows(
+            windows, weights, contrast, max_iter, 1e-12
+        )
+        assert unfinished == 0 and iterations == 4
+        np.testing.assert_allclose(roots, 1.98e-14, rtol=0, atol=1e-13)
+
+
+def test_overflowing_probes_and_8H_match_generic_path():
+    big = np.finfo(float).max
+    cases = [
+        (np.array([[0, 0, big, big, big, np.inf]]), np.array([0.7, 0.3, 0.1, 0.1, 0.9, 1.0]), 0.2),
+        (np.array([[-big, big, 0.0]]), np.array([1.0, 2.0, 1.0]), 2.5e307),
+    ]
+    for windows, weights, H in cases:
+        assert_same_fit(
+            _newton_fit_windows(windows, weights, SmoothAbs(H), 100, 1e-12),
+            _newton_fit_windows(windows, weights, GenericSmoothAbs(H), 100, 1e-12),
+        )
+
+
 @pytest.mark.parametrize("lookup", [False, True])
 def test_nan_and_zero_weights_inside_the_span_are_dropped(lookup):
     windows = np.random.default_rng(2).normal(size=(4, 5))
