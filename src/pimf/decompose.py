@@ -11,18 +11,23 @@ import numpy as np
 from numpy.lib.stride_tricks import sliding_window_view
 
 from ._erf import SQRT_2
+from ._newton import _newton_fit_windows
 from .contrasts import Quadratic
 from .kernels import squared_triangle
 
 
 @dataclass(frozen=True)
 class StageInfo:
-    """Per-stage diagnostics; unconverged windows hit max_iter with final updates
-    above tol * (1 + max(abs(x))), using each chunk's final estimates.
-    converged is True exactly when unconverged_windows is zero; this does not
-    bound distance to the score root. Parallel fits report maximum iterations
-    and final_max_delta across chunks and sum unconverged_windows. Direct solvers
-    report iterations=1 and final_max_delta=nan, with no unconverged windows.
+    """Per-stage diagnostics; converged means unconverged_windows is zero.
+
+    GD counts final updates above tol * (1 + max(abs(x))) using each chunk's
+    final estimates; a zero count does not bound distance to the score root.
+    Newton counts rows still active at the cap, sums bisection fallbacks and
+    reports the largest absolute weighted score. Parallel fits report maximum
+    iterations and final_max_delta and sum unconverged_windows across chunks.
+    Direct solvers report iterations=1 and final_max_delta=nan, with no
+    unconverged windows. GD and direct solvers leave bisection_fallbacks=0 and
+    max_abs_score=nan.
     """
 
     stage: int
@@ -32,6 +37,8 @@ class StageInfo:
     bandwidth: float
     converged: bool
     unconverged_windows: int = 0
+    bisection_fallbacks: int = 0
+    max_abs_score: float = float("nan")
 
 
 @dataclass
@@ -92,9 +99,12 @@ def _gd_fit_windows(windows, weights, contrast, max_iter, tol):
 class IMF:
     """Reusable local M-estimator configuration for one-dimensional signals.
 
-    Quadratic contrasts use their closed-form solver. Other contrasts use
-    clipped gradient descent. Each decompose() call returns an independent result.
-    on_unconverged controls stages that hit max_iter with windows still moving:
+    Contrasts with solve() use their closed form regardless of solver. Others
+    use clipped gradient descent by default, or safeguarded Newton with
+    solver="newton" and a vectorized psi_prime(r). Unspecified max_iter/tol
+    use 60/1e-6 for GD and 100/1e-12 for Newton. Each decompose() call returns
+    an independent result.
+    on_unconverged controls stages that hit max_iter with unconverged windows:
     "warn" emits RuntimeWarning, "raise" raises RuntimeError, "ignore" is silent.
     """
 
@@ -104,11 +114,18 @@ class IMF:
         kernel=None,
         *,
         boundary="wrap",
-        max_iter=60,
-        tol=1e-6,
+        max_iter=None,
+        tol=None,
         workers=1,
+        solver="gd",
         on_unconverged="warn",
     ):
+        if not isinstance(solver, str) or solver not in ("gd", "newton"):
+            raise ValueError("solver must be 'gd' or 'newton'")
+        if max_iter is None:
+            max_iter = 100 if solver == "newton" else 60
+        if tol is None:
+            tol = 1e-12 if solver == "newton" else 1e-6
         if (
             isinstance(workers, (bool, np.bool_))
             or not isinstance(workers, Integral)
@@ -138,7 +155,15 @@ class IMF:
         self.max_iter = max_iter
         self.tol = tol
         self.workers = int(workers)
+        self.solver = solver
         self.on_unconverged = on_unconverged
+        if solver == "newton" and not callable(getattr(self.contrast, "solve", None)):
+            if not callable(getattr(self.contrast, "psi_prime", None)):
+                raise ValueError("solver='newton' requires contrast.psi_prime(r)")
+            try:
+                self.contrast.psi_prime(np.zeros(1))
+            except (AttributeError, NotImplementedError) as error:
+                raise ValueError("solver='newton' requires contrast.psi_prime(r)") from error
 
     def decompose(self, y, *, h1=0.25, a=SQRT_2, k_max=8, h_min=None, window_sizes=None):
         """Extract up to k_max components with h[k+1] = h[k] / a.
@@ -154,8 +179,9 @@ class IMF:
 
         workers > 1 fits contiguous chunks of windows in threads, with at least
         64 windows per chunk except the last. Stages remain sequential. Each
-        chunk stops independently, so robust results can vary with workers near
-        the solver tolerance. Custom contrasts must support concurrent calls
+        GD chunk stops independently, so GD results can vary with workers near
+        the solver tolerance. Newton stops rows independently and is unaffected
+        by workers. Custom contrasts must support concurrent calls
         without mutating shared state or their input arrays.
         """
         y = np.asarray(y, dtype=float)
@@ -225,8 +251,13 @@ class IMF:
 
         def fit(windows, weights):
             if callable(solve):
-                return solve(windows, weights), 1, float("nan"), 0
-            return _gd_fit_windows(windows, weights, self.contrast, self.max_iter, self.tol)
+                return solve(windows, weights), 1, float("nan"), 0, 0, float("nan")
+            if self.solver == "newton":
+                return _newton_fit_windows(windows, weights, self.contrast, self.max_iter, self.tol)
+            component, iterations, delta, unconverged_windows = _gd_fit_windows(
+                windows, weights, self.contrast, self.max_iter, self.tol
+            )
+            return component, iterations, delta, unconverged_windows, 0, float("nan")
 
         chunk_size = (
             len(y) if self.workers == 1 else max(64, (len(y) + self.workers - 1) // self.workers)
@@ -243,7 +274,9 @@ class IMF:
                 padded = np.pad(residual, size // 2, mode=self.boundary)
                 windows = sliding_window_view(padded, size)
                 if executor is None:
-                    component, iterations, delta, unconverged_windows = fit(windows, weights)
+                    component, iterations, delta, unconverged_windows, fallbacks, score = fit(
+                        windows, weights
+                    )
                 else:
                     fits = list(
                         executor.map(fit, (windows[chunk] for chunk in chunks), repeat(weights))
@@ -252,6 +285,8 @@ class IMF:
                     iterations = max(part[1] for part in fits)
                     delta = float(np.max([part[2] for part in fits]))
                     unconverged_windows = sum(part[3] for part in fits)
+                    fallbacks = sum(part[4] for part in fits)
+                    score = max(part[5] for part in fits)
                 if unconverged_windows:
                     noun = "window" if unconverged_windows == 1 else "windows"
                     iteration_noun = "iteration" if iterations == 1 else "iterations"
@@ -275,6 +310,8 @@ class IMF:
                         h,
                         unconverged_windows == 0,
                         unconverged_windows,
+                        fallbacks,
+                        score,
                     )
                 )
         return IMFResult(np.stack(components), residual, stages, window_sizes, bandwidths)

@@ -41,3 +41,24 @@ Regenerate from an unchanged checkout of that research commit:
 ```sh
 uv run python tests/data/generate_lookup_reference.py /path/to/imf
 ```
+
+# Newton reference fixture
+
+`newton_reference.npz` uses `erf_approx` and `make_lookup_grid` extracted from
+the same research notebook at commit
+`0ba4c723d4c2abddeb3c5a1ac14c8ff93cc0e6d0`. Its generator does not import pimf.
+Independent bisection on the notebook's score tables locates both boundaries
+of the zero set, then returns their midpoint. Lookup interpolation uses
+`np.interp` with endpoint table clamping, matching pimf's score convention.
+Direct-score roots use the notebook's `erf_approx`.
+
+The fixture contains random, constant, outlier and clustered windows at
+H = 0.01, 1 and 10, with widths 3, 5, 7, 65, 257 and 1025, including zero
+weights. It also contains an equal-weight two-cluster flat interval, score
+slopes, the issue #3 spike root, and all 17 components of the issue #3 bursty
+signal at L = 2048. Tests additionally bisect the library's score to distinguish
+solver error from interpolation roundoff, and compare with tightly converged GD.
+
+```sh
+uv run python tests/data/generate_newton_reference.py /path/to/imf
+```

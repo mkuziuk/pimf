@@ -2,8 +2,9 @@
 
 A contrast supplies the loss rho (via __call__), its derivative psi (the
 score), and an upper bound on rho'' (curvature) that sets a stable gradient
-step. A contrast with a closed-form minimizer may also provide
-solve(windows, weights); the decomposition then skips gradient descent.
+step. Newton additionally uses psi_prime, the slope of psi in raw residual
+units. A contrast with a closed-form minimizer may also provide
+solve(windows, weights); the decomposition then skips iterative fitting.
 """
 
 from numbers import Real
@@ -44,6 +45,10 @@ class Contrast:
         """Score rho'(r), vectorized; drives the gradient-descent update."""
         raise NotImplementedError
 
+    def psi_prime(self, r):
+        """Slope of psi(r), vectorized; required only for Newton fitting."""
+        raise NotImplementedError
+
     def curvature(self):
         """Upper bound on rho''; the gradient step size is 0.95 / curvature()."""
         raise NotImplementedError
@@ -57,6 +62,9 @@ class Quadratic(Contrast):
 
     def psi(self, r):
         return np.asarray(r, dtype=float)
+
+    def psi_prime(self, r):
+        return np.ones_like(r, dtype=float)
 
     def curvature(self):
         return 1.0
@@ -112,6 +120,21 @@ class SmoothAbs(Contrast):
         result = _SCORE_DELTA[index] * fraction
         result += _SCORE[index]
         return result
+
+    def psi_prime(self, r):
+        """Score slope in raw residual units, including the factor 1/H.
+
+        Lookup evaluation uses the right-hand slope at grid knots and zero
+        outside the grid. Direct evaluation uses the Gaussian density slope;
+        psi itself still uses the research erf approximation.
+        """
+        r = np.asarray(r, dtype=float)
+        if not self.lookup:
+            return SQRT_2_OVER_PI / self.H * np.exp(-0.5 * (r / self.H) ** 2)
+        index, _ = _lookup_coordinates(r, self.H)
+        slope = _SCORE_DELTA[index] * (256.0 / self.H)
+        slope = np.where(np.abs(r) > 8.0 * self.H, 0.0, slope)
+        return np.where(np.isnan(r), np.nan, slope)
 
     def curvature(self):
         return SQRT_2_OVER_PI / self.H
