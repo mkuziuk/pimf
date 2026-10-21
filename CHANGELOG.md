@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased
+
+- Add `IMF(on_unconverged="warn" | "raise" | "ignore")`, defaulting to a
+  `RuntimeWarning` with the stage, window size and total unconverged window count.
+  The policy also applies with multiple workers.
+- Add `StageInfo.unconverged_windows` and test each row's final update against its
+  own tolerance when reporting convergence. Preserve research numerical results
+  and stopping iterations; rows are not frozen independently. The policy also
+  covers rows that fail their tolerance when the research stop rule exits early.
+
 ## 0.4.0
 
 - `SmoothAbs(H)` now uses precomputed score and exponential tables with uniform

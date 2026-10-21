@@ -74,7 +74,7 @@ def test_inclusive_minimum_survives_geometric_roundoff():
 def test_explicit_windows_define_the_schedule(contrast):
     y = np.random.default_rng(777).normal(size=64)
     windows = [31, 15, 7]
-    result = IMF(contrast).decompose(y, window_sizes=windows)
+    result = IMF(contrast, on_unconverged="ignore").decompose(y, window_sizes=windows)
     assert result.window_sizes == windows
     assert result.bandwidths == [15 / 64, 7 / 64, 3 / 64]
     assert result.imfs.shape == (len(windows), len(y))
@@ -100,7 +100,7 @@ def test_custom_profile_subclass_supports_fractional_bandwidths():
 
 
 def test_configuration_reuse_returns_independent_results():
-    model = IMF(SmoothAbs(H=0.2), kernel=triangle)
+    model = IMF(SmoothAbs(H=0.2), kernel=triangle, on_unconverged="ignore")
     y = np.random.default_rng(12).normal(size=32)
     original = y.copy()
     first = model.decompose(y, window_sizes=[9, 5])
@@ -185,7 +185,8 @@ def test_invalid_schedule_raises(schedule):
 
 def test_convergence_metadata_distinguishes_capped_and_converged_fits():
     y = np.array([0.0, 0.0, 10.0, 2.0, 0.0, 1.0, 0.0])
-    capped = IMF(SmoothAbs(H=0.2), max_iter=1, tol=1e-15).decompose(y, window_sizes=[5])
+    with pytest.warns(RuntimeWarning):
+        capped = IMF(SmoothAbs(H=0.2), max_iter=1, tol=1e-15).decompose(y, window_sizes=[5])
     stage = capped.stages[0]
     assert stage.stage == 1
     assert stage.window_size == 5
@@ -193,11 +194,14 @@ def test_convergence_metadata_distinguishes_capped_and_converged_fits():
     assert stage.iterations == 1
     assert stage.final_max_delta > 1e-15 * (1 + np.max(np.abs(capped.imfs[0])))
     assert not stage.converged
+    assert stage.unconverged_windows > 0
     converged = IMF(SmoothAbs(H=0.2)).decompose(np.ones(32), window_sizes=[5])
     assert converged.stages[0].converged
+    assert converged.stages[0].unconverged_windows == 0
     assert converged.stages[0].iterations == 1
     assert converged.stages[0].final_max_delta == 0
     closed = IMF().decompose(y, window_sizes=[5])
     assert closed.stages[0].converged
+    assert closed.stages[0].unconverged_windows == 0
     assert closed.stages[0].iterations == 1
     assert np.isnan(closed.stages[0].final_max_delta)

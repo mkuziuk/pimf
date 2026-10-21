@@ -39,8 +39,12 @@ def decompositions(signals):
     return {
         "linear_noisy": IMF().decompose(y_noisy, window_sizes=WINDOW_SIZES),
         "linear_clean": IMF().decompose(x_clean, window_sizes=WINDOW_SIZES),
-        "robust_noisy": IMF(SmoothAbs(H=H)).decompose(y_noisy, window_sizes=WINDOW_SIZES),
-        "robust_clean": IMF(SmoothAbs(H=H)).decompose(x_clean, window_sizes=WINDOW_SIZES),
+        "robust_noisy": IMF(SmoothAbs(H=H), on_unconverged="ignore").decompose(
+            y_noisy, window_sizes=WINDOW_SIZES
+        ),
+        "robust_clean": IMF(SmoothAbs(H=H), on_unconverged="ignore").decompose(
+            x_clean, window_sizes=WINDOW_SIZES
+        ),
     }
 
 
@@ -79,7 +83,9 @@ def test_robust_beats_linear_on_mean_mae(decompositions):
 def test_golden_spot_values(signals):
     # Frozen from the implementation after it was verified bit-identical to
     # the reference notebook on this exact case (cross-check script).
-    result = IMF(SmoothAbs(H=H, lookup=False)).decompose(signals[1], window_sizes=WINDOW_SIZES)
+    result = IMF(SmoothAbs(H=H, lookup=False), on_unconverged="ignore").decompose(
+        signals[1], window_sizes=WINDOW_SIZES
+    )
     golden_imfs = {
         (0, 0): 0.07303580151881464,
         (0, 500): 0.11423344217234899,

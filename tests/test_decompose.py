@@ -25,12 +25,14 @@ def test_reconstruction_linear(noisy_signal):
 
 
 def test_reconstruction_robust(noisy_signal):
-    result = IMF(SmoothAbs(H=0.4)).decompose(noisy_signal)
+    result = IMF(SmoothAbs(H=0.4), on_unconverged="ignore").decompose(noisy_signal)
     assert np.max(np.abs(result.reconstruction - noisy_signal)) < 1e-10
 
 
 def test_shapes_and_stage_info(noisy_signal):
-    result = IMF(SmoothAbs(H=0.4)).decompose(noisy_signal, window_sizes=[151, 75, 31])
+    result = IMF(SmoothAbs(H=0.4), on_unconverged="ignore").decompose(
+        noisy_signal, window_sizes=[151, 75, 31]
+    )
     assert result.imfs.shape == (3, len(noisy_signal))
     assert result.residual.shape == (len(noisy_signal),)
     assert result.window_sizes == [151, 75, 31]
@@ -47,6 +49,7 @@ def test_linear_stage_info(noisy_signal):
     for info in result.stages:
         assert info.iterations == 1
         assert np.isnan(info.final_max_delta)
+        assert info.unconverged_windows == 0
 
 
 def test_linearity_of_quadratic_decomposition():
@@ -70,8 +73,9 @@ def test_gd_quadratic_matches_closed_form(noisy_signal):
 def test_robust_fit_symmetric_window_returns_center():
     windows = np.array([[0.0, 1.0, 2.0, 3.0, 4.0]])
     weights = SquaredTriangle().weights(5)
-    x, _, _ = _gd_fit_windows(windows, weights, SmoothAbs(0.5), max_iter=60, tol=1e-6)
+    x, _, _, unconverged = _gd_fit_windows(windows, weights, SmoothAbs(0.5), max_iter=60, tol=1e-6)
     assert x[0] == 2.0
+    assert unconverged == 0
 
 
 def test_stage_one_noise_sd():
@@ -125,7 +129,8 @@ def test_boundaries_differ_at_the_edges():
 
 
 def test_max_iter_is_respected(noisy_signal):
-    result = IMF(SmoothAbs(H=0.4), max_iter=1).decompose(noisy_signal, window_sizes=[63, 31])
+    with pytest.warns(RuntimeWarning):
+        result = IMF(SmoothAbs(H=0.4), max_iter=1).decompose(noisy_signal, window_sizes=[63, 31])
     for info in result.stages:
         assert info.iterations == 1
 
