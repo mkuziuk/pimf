@@ -50,7 +50,8 @@ def _newton_fit_windows(windows, weights, contrast, max_iter, tol):
     windows = np.ascontiguousarray(windows, dtype=float)
     weights = weights / weights.sum()
     block = max(1, _BLOCK_SAMPLES // windows.shape[1])
-    lookup = type(contrast) is SmoothAbs and contrast.lookup
+    # Weights wider than float64 would change the fused products.
+    lookup = type(contrast) is SmoothAbs and contrast.lookup and np.can_cast(weights.dtype, float)
     if lookup:
         # Dividing by an exact H / 256 gives SmoothAbs's 256 * (r / H) without rounding;
         # the zero-slope padding below needs a finite 8H.
@@ -72,7 +73,7 @@ def _newton_fit_windows(windows, weights, contrast, max_iter, tol):
     def evaluate(rows, estimates, slope=False):
         """Weighted scores of rows (None: all) at estimates, and lookup slopes if requested."""
         if not lookup:
-            # One call per batch keeps 0.5.0's results for any psi dtype or memory layout.
+            # Whole batches: reductions of custom dtypes and layouts can depend on their shape.
             sample = windows if rows is None else windows[rows]
             return np.sum(weights * contrast.psi(sample - estimates[:, None]), axis=1), None
         scores = np.empty(len(estimates))
@@ -81,7 +82,7 @@ def _newton_fit_windows(windows, weights, contrast, max_iter, tol):
         for start in range(0, len(estimates), block):
             part = slice(start, start + block)
             estimate = estimates[part, None]
-            # Must match SmoothAbs.psi and psi_prime bit for bit; both share a position.
+            # Must match SmoothAbs.psi, and psi_prime except at unused NaN residuals.
             n = len(estimate)
             p, f, i, w = position[:n], floor[:n], index[:n], tiled_weights[:n]
             if rows is None:
@@ -112,7 +113,7 @@ def _newton_fit_windows(windows, weights, contrast, max_iter, tol):
         return scores, slopes
 
     def slope_at(rows, estimates):
-        """Generic score slopes, evaluated on 0.5.0's batches."""
+        """Generic score slopes of whole batches of moving rows."""
         return np.sum(weights * contrast.psi_prime(windows[rows] - estimates[:, None]), axis=1)
 
     def weighted_median(rows):
@@ -170,8 +171,9 @@ def _newton_fit_windows(windows, weights, contrast, max_iter, tol):
                     xr[stalled] = weighted_median(rows[stalled])
                     score[stalled], restart = evaluate(rows[stalled], xr[stalled], slope=True)
                     slope[stalled] = restart if lookup else slope_at(rows[stalled], xr[stalled])
-                lower = np.where(score > 0, xr, lo[rows])
-                upper = np.where(score < 0, xr, hi[rows])
+                # Bracket ends stay float64, as lo and hi are, for any estimate dtype.
+                lower = np.where(score > 0, xr, lo[rows]).astype(lo.dtype, copy=False)
+                upper = np.where(score < 0, xr, hi[rows]).astype(hi.dtype, copy=False)
                 step = np.full(len(rows), np.inf)
                 np.divide(score, slope, out=step, where=(slope > 0) & np.isfinite(slope))
                 candidate = xr + step
@@ -225,12 +227,12 @@ def _newton_fit_windows(windows, weights, contrast, max_iter, tol):
                         right_score > 0,
                         np.maximum(lows, right),
                         np.where(left_score > 0, np.maximum(lows, left), lows),
-                    )
+                    ).astype(lo.dtype, copy=False)
                     highs = np.where(
                         left_score < 0,
                         np.minimum(highs, left),
                         np.where(right_score < 0, np.minimum(highs, right), highs),
-                    )
+                    ).astype(hi.dtype, copy=False)
                     next_x = np.where(left_score == 0, left, right)
                     retry = ~bracketed & ~zero_hit
                     if np.any(retry):

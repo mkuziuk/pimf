@@ -747,6 +747,21 @@ def test_extreme_H_lookup_matches_generic_path(H):
         )
 
 
+@pytest.mark.parametrize("lookup", [False, True])
+def test_longdouble_weights_bisect_like_float64_weights(lookup):
+    class LongDoubleKernel:
+        def weights(self, size, *, bandwidth=None):
+            return squared_triangle.weights(size, bandwidth=bandwidth).astype(np.longdouble)
+
+    y = np.random.default_rng(0).normal(0, 0.1, 64)
+    y[20] = 100.0
+    contrast = SmoothAbs(1.0, lookup=lookup)
+    wide = IMF(contrast, LongDoubleKernel(), solver="newton", on_unconverged="raise").decompose(y)
+    plain = IMF(contrast, solver="newton", on_unconverged="raise").decompose(y)
+    assert wide.stages[0].bisection_fallbacks > 0
+    np.testing.assert_allclose(wide.imfs, plain.imfs, rtol=0, atol=1e-12)
+
+
 def test_huge_H_slope_table_does_not_raise_underflow():
     with np.errstate(under="raise"):
         result = IMF(SmoothAbs(1e300), solver="newton").decompose(np.ones(3), window_sizes=[3])
