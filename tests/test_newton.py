@@ -784,6 +784,39 @@ def test_overflowing_probes_and_8H_match_generic_path():
         )
 
 
+def test_custom_float32_scores_keep_float32_steps():
+    class Cubic32(Contrast):
+        def psi(self, r):
+            return r.astype(np.float32) ** 3
+
+        def psi_prime(self, r):
+            return 3 * r.astype(np.float32) ** 2
+
+    windows, weights = np.array([[0.0, 1.0, 3.0]]), np.array([1, 2, 3], dtype=np.float32)
+    roots = _newton_fit_windows(windows, weights, Cubic32(), 1, 1e-12)[0]
+    weights = weights / weights.sum()
+    x = np.sum(windows * weights, axis=1)
+    score = np.sum(weights * Cubic32().psi(windows - x[:, None]), axis=1)
+    slope = np.sum(weights * Cubic32().psi_prime(windows - x[:, None]), axis=1)
+    assert score.dtype == slope.dtype == np.float32
+    np.testing.assert_array_equal(roots, x + np.divide(score, slope, out=np.empty(1)))
+
+
+def test_custom_scores_reduce_over_the_full_batch():
+    class FortranSmoothAbs(SmoothAbs):
+        def psi(self, r):
+            return np.asfortranarray(super().psi(r))
+
+        def psi_prime(self, r):
+            return np.asfortranarray(super().psi_prime(r))
+
+    windows, weights = np.random.default_rng(0).normal(size=(2, 65)), np.ones(65) / 65
+    contrast = FortranSmoothAbs(0.4)
+    roots, _, _, _, _, score = _newton_fit_windows(windows, weights, contrast, 100, 1e-12)
+    scores = np.sum(weights * contrast.psi(windows - roots[:, None]), axis=1)
+    assert score == np.max(np.abs(scores))
+
+
 @pytest.mark.parametrize("lookup", [False, True])
 def test_nan_and_zero_weights_inside_the_span_are_dropped(lookup):
     windows = np.random.default_rng(2).normal(size=(4, 5))

@@ -69,20 +69,17 @@ def _newton_fit_windows(windows, weights, contrast, max_iter, tol):
     finite_samples = np.all(np.isfinite(lo)) and np.all(np.isfinite(hi))
 
     def evaluate(rows, estimates, slope=False):
-        """Weighted scores, and slopes if requested, of rows (None: all) at estimates."""
+        """Weighted scores of rows (None: all) at estimates, and lookup slopes if requested."""
+        if not lookup:
+            # One call per batch keeps 0.5.0's results for any psi dtype or memory layout.
+            sample = windows if rows is None else windows[rows]
+            return np.sum(weights * contrast.psi(sample - estimates[:, None]), axis=1), None
         scores = np.empty(len(estimates))
         slopes = np.empty(len(estimates)) if slope else None
         nan_positions = not finite_samples or np.isnan(estimates).any()
         for start in range(0, len(estimates), block):
             part = slice(start, start + block)
             estimate = estimates[part, None]
-            if not lookup:
-                sample = windows[part] if rows is None else windows[rows[part]]
-                scores[part] = np.sum(weights * contrast.psi(sample - estimate), axis=1)
-                if slope:
-                    psi_prime = contrast.psi_prime(sample - estimate)
-                    slopes[part] = np.sum(weights * psi_prime, axis=1)
-                continue
             # Must match SmoothAbs.psi and psi_prime bit for bit; both share a position.
             n = len(estimate)
             p, f, i, w = position[:n], floor[:n], index[:n], tiled_weights[:n]
@@ -113,6 +110,10 @@ def _newton_fit_windows(windows, weights, contrast, max_iter, tol):
                 slopes[part] = g.sum(axis=1)
         return scores, slopes
 
+    def slope_at(rows, estimates):
+        """Generic score slopes, evaluated on 0.5.0's batches."""
+        return np.sum(weights * contrast.psi_prime(windows[rows] - estimates[:, None]), axis=1)
+
     def weighted_median(rows):
         order = np.argsort(windows[rows], axis=1)
         middle = np.argmax(np.cumsum(weights[order], axis=1) >= 0.5, axis=1)
@@ -142,31 +143,32 @@ def _newton_fit_windows(windows, weights, contrast, max_iter, tol):
             if rows.size:
                 xr = x[rows]
                 score, slope = evaluate(None if rows.size == len(x) else rows, xr, slope=True)
-                keep = np.isfinite(score) & np.isfinite(xr)
-                if not np.all(keep):
-                    delta[rows[~keep]] = np.nan
-                    rows, xr, score, slope = rows[keep], xr[keep], score[keep], slope[keep]
-                keep = score != 0
-                if not np.all(keep):
-                    zeros, xz = rows[~keep], xr[~keep]
+                finite = np.isfinite(score) & np.isfinite(xr)
+                delta[rows[~finite]] = np.nan
+                zero = finite & (score == 0)
+                if np.any(zero):
+                    zeros, xz = rows[zero], xr[zero]
                     epsilon = tol * (1.0 + np.abs(xz))
                     left_score = evaluate(zeros, xz - epsilon)[0]
                     right_score = evaluate(zeros, xz + epsilon)[0]
-                    finite = np.isfinite(left_score) & np.isfinite(right_score)
+                    probed = np.isfinite(left_score) & np.isfinite(right_score)
                     plateau = (
-                        finite & ((left_score == 0) | (right_score == 0)) & (lo[zeros] < hi[zeros])
+                        probed & ((left_score == 0) | (right_score == 0)) & (lo[zeros] < hi[zeros])
                     )
                     flat[zeros[plateau]] = True
                     zero_left[zeros[plateau]] = xz[plateau]
                     zero_right[zeros[plateau]] = xz[plateau]
-                    done[zeros] = known[zeros] = finite & ~plateau
-                    delta[zeros] = np.where(finite, 0.0, np.nan)
-                    rows, xr, score, slope = rows[keep], xr[keep], score[keep], slope[keep]
+                    done[zeros] = probed & ~plateau
+                    delta[zeros] = np.where(probed, 0.0, np.nan)
+                moving = finite & ~zero
+                rows, xr, score = rows[moving], xr[moving], score[moving]
+                slope = slope[moving] if lookup else slope_at(rows, xr)
 
                 if iterations == 1 and np.any(slope == 0):
                     stalled = slope == 0
                     xr[stalled] = weighted_median(rows[stalled])
-                    score[stalled], slope[stalled] = evaluate(rows[stalled], xr[stalled], True)
+                    score[stalled], restart = evaluate(rows[stalled], xr[stalled], slope=True)
+                    slope[stalled] = restart if lookup else slope_at(rows[stalled], xr[stalled])
                 lower = np.where(score > 0, xr, lo[rows])
                 upper = np.where(score < 0, xr, hi[rows])
                 step = np.full(len(rows), np.inf)
@@ -192,25 +194,28 @@ def _newton_fit_windows(windows, weights, contrast, max_iter, tol):
                     lows, highs = lower[small], upper[small]
                     epsilon = tol * (1.0 + np.abs(cs))
                     left, right = cs - epsilon, cs + epsilon
-                    at_candidate = evaluate(probe_rows, cs)[0]
-                    # Lookup scores are nonincreasing as computed (the table differences
-                    # are exact), so score(x) or score(candidate) fixes the sign of a
-                    # finite probe beyond them. Other scores can wiggle by rounding.
-                    left_score = np.where(at_candidate > 0, at_candidate, ss)
-                    right_score = np.where(at_candidate < 0, at_candidate, ss)
-                    known_left = (at_candidate > 0) | ((ss > 0) & (left <= xs))
-                    known_right = (at_candidate < 0) | ((ss < 0) & (right >= xs))
-                    probe_left = ~(lookup & known_left & np.isfinite(left))
-                    probe_right = ~(lookup & known_right & np.isfinite(right))
-                    probes = evaluate(
-                        np.concatenate((probe_rows[probe_left], probe_rows[probe_right])),
-                        np.concatenate((left[probe_left], right[probe_right])),
-                    )[0]
-                    split = np.count_nonzero(probe_left)
-                    left_score[probe_left], right_score[probe_right] = (
-                        probes[:split],
-                        probes[split:],
-                    )
+                    if lookup:
+                        at_candidate = evaluate(probe_rows, cs)[0]
+                        # Lookup scores are nonincreasing as computed (the table differences
+                        # are exact), so score(x) or score(candidate) fixes the sign of a
+                        # finite probe beyond them.
+                        left_score = np.where(at_candidate > 0, at_candidate, ss)
+                        right_score = np.where(at_candidate < 0, at_candidate, ss)
+                        known_left = (at_candidate > 0) | ((ss > 0) & (left <= xs))
+                        known_right = (at_candidate < 0) | ((ss < 0) & (right >= xs))
+                        probe_left = ~(known_left & np.isfinite(left))
+                        probe_right = ~(known_right & np.isfinite(right))
+                        probes = evaluate(
+                            np.concatenate((probe_rows[probe_left], probe_rows[probe_right])),
+                            np.concatenate((left[probe_left], right[probe_right])),
+                        )[0]
+                        split = np.count_nonzero(probe_left)
+                        left_score[probe_left] = probes[:split]
+                        right_score[probe_right] = probes[split:]
+                    else:
+                        # Other scores can wiggle by rounding, so both probes are evaluated.
+                        left_score = evaluate(probe_rows, left)[0]
+                        right_score = evaluate(probe_rows, right)[0]
                     finite = np.isfinite(left_score) & np.isfinite(right_score)
                     zero_hit = finite & ((left_score == 0) | (right_score == 0))
                     bracketed = finite & (left_score >= 0) & (right_score <= 0)
@@ -232,8 +237,9 @@ def _newton_fit_windows(windows, weights, contrast, max_iter, tol):
                     lower[small], upper[small] = lows, highs
                     candidate[small] = np.where(end, cs, next_x)
                     finished[small] = end
-                    known[probe_rows[end]] = True
-                    final_score[probe_rows[end]] = at_candidate[end]
+                    if lookup:
+                        known[probe_rows[end]] = True
+                        final_score[probe_rows[end]] = at_candidate[end]
                     fallbacks += int(np.count_nonzero(retry))
                 moved = np.abs(candidate - xr)
                 delta[rows] = moved
@@ -264,7 +270,10 @@ def _newton_fit_windows(windows, weights, contrast, max_iter, tol):
                 fallbacks += 2 * len(rows)
 
         rows = np.flatnonzero(~known)
-        final_score[rows] = evaluate(None if rows.size == len(x) else rows, x[rows])[0]
+        if rows.size == len(x):
+            final_score = evaluate(None, x)[0]
+        else:
+            final_score[rows] = evaluate(rows, x[rows])[0]
     finite = np.isfinite(x) & np.isfinite(final_score)
     done &= finite
     delta[~finite] = np.nan
