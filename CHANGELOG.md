@@ -1,28 +1,47 @@
 # Changelog
 
-## Unreleased
+## 0.5.0
 
-- Add `IMF(on_unconverged="warn" | "raise" | "ignore")`, defaulting to a
-  `RuntimeWarning` when a stage hits `max_iter` with windows still moving. The
-  message includes the stage, window size and total unconverged window count.
-  The policy also applies with multiple workers.
-- Add `StageInfo.unconverged_windows`, counting final row updates above the
-  solver chunk's stopping threshold, `tol * (1 + max(abs(x)))`. Preserve research
-  numerical results and stopping iterations. `converged=True` means this count
-  is zero; it does not bound distance to the score root. Non-finite updates
-  count as unconverged, and parallel diagnostics propagate NaN.
-- Batch users can silence per-stage warnings with `on_unconverged="ignore"`
-  and inspect `StageInfo.converged` / `unconverged_windows`, or use a Python
-  `warnings` filter. Long schedules and repeated runs can emit many warnings.
+- Add `IMF(on_unconverged="warn" | "raise" | "ignore")`, defaulting to one
+  `RuntimeWarning` per capped stage with unfinished windows. Messages include
+  the stage, window size, unfinished count and a remedy. The policy also
+  applies with multiple workers.
+- Add opt-in `solver="newton"` for robust local score roots, with independent
+  window stopping and safeguarded bisection. Stalled weighted means restart
+  at a weighted median. Outlier-wide brackets bisect float64 ranks, bounding
+  these searches to at most 64 ordered halvings. Small steps require a
+  positional root bracket. Flat zero-score intervals return the midpoint of
+  boundaries resolved to tolerance at their edge scale. Non-finite scores or
+  estimates remain unconverged. Built-in contrasts give bit-identical Newton
+  values and diagnostics across worker counts.
+- Add vectorized `Contrast.psi_prime(r)` for custom Newton contrasts, with
+  implementations for `Quadratic` and `SmoothAbs`. Slopes use raw residual
+  units, including `1/H`; lookup slopes follow the piecewise-linear score.
+  Direct evaluation retains the research `erf_approx` score and uses the
+  Gaussian slope. Closed-form `solve()` hooks still take precedence.
+- Add `StageInfo.unconverged_windows`, `bisection_fallbacks` and `max_abs_score`.
+  GD counts updates above the final chunk threshold, `tol * (1 + max(abs(x)))`,
+  including non-finite updates. Its score diagnostic uses the last evaluated
+  iterate, before the final update, without another score pass. Newton reports
+  the score at its returned estimates. Parallel maxima propagate NaN and
+  counts sum across workers. Direct fits report NaN scores and deltas.
+- Add a reproducible solver benchmark; see `benchmarks/README.md` for measured
+  times, evaluation costs and the protocol.
 
 ### Upgrading from 0.4.0
 
-`IMF.on_unconverged` is a new configuration attribute. Default GD now emits
-`RuntimeWarning` on capped stages, so suites using `-W error` or
-`filterwarnings=error` may fail. Set `on_unconverged="ignore"` or add a warning
-filter. `StageInfo` gained the defaulted `unconverged_windows` field: existing
-positional construction still works, but `dataclasses.astuple()` returns one
-more item.
+The signature defaults `IMF(max_iter=None, tol=None)` now resolve per solver:
+GD retains `60` and `1e-6`, with bit-identical research numerics; Newton uses
+`100` and `1e-12`. Explicit values override these defaults. `IMF.solver` and
+`IMF.on_unconverged` are new configuration attributes.
+
+Default GD now emits `RuntimeWarning` on capped stages, so suites using
+`-W error` or `filterwarnings=error` may fail. Set `on_unconverged="ignore"`
+or add a warning filter. `StageInfo` gained three defaulted fields: existing
+positional construction still works, but `dataclasses.astuple()` now returns
+nine items instead of six. GD's small-update convergence flag does not bound
+distance to the score root. Newton's positional tolerance does not remove
+lookup table approximation error.
 
 ## 0.4.0
 

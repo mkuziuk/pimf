@@ -41,3 +41,44 @@ Regenerate from an unchanged checkout of that research commit:
 ```sh
 uv run python tests/data/generate_lookup_reference.py /path/to/imf
 ```
+
+# Newton reference fixture
+
+`newton_reference.npz` uses `erf_approx` and `make_lookup_grid` extracted from
+the same research notebook at commit
+`0ba4c723d4c2abddeb3c5a1ac14c8ff93cc0e6d0`. Its generator does not import pimf.
+Independent bisection on the notebook's score tables locates both boundaries
+of the zero set, then returns their midpoint. Lookup interpolation uses
+`np.interp` with endpoint table clamping, matching pimf's score convention.
+Direct-score roots use the notebook's `erf_approx`.
+
+The fixture contains random, constant, outlier and clustered windows at
+H = 0.01, 1 and 10, with widths 3, 5, 7, 65, 257 and 1025, including zero
+weights. It also contains an equal-weight two-cluster flat interval, score
+slopes, the issue #3 spike root, and all 17 components of the issue #3 bursty
+signal at L = 2048. Tests additionally bisect the library's score to distinguish
+solver error from interpolation roundoff, and compare with tightly converged GD.
+Adversarial cases cover grid-aligned and direct-score flat intervals, mirrored
+inputs, H=1e-14, and flat intervals at scales 1e2, 1e4 and 1e8. Their roots use
+the same independent research-score bisection. Extreme outliers at 1e15,
+1e30, 9.97e36 and 3.4e38 use 256 bisections to resolve the root despite the
+initial range. Both uniform windows and the nearly half-weight spike kernel
+are covered.
+
+The flat-interval fixture also saves both zero-set boundaries. Its positional
+tolerance is `tol * (1 + max(abs(boundaries)))`, since the solver resolves each
+edge at that scale before taking their midpoint. Zero-weight samples do not
+enter this scale or the bracket.
+
+Additional research-score bisections cover a seven-sample zero-slope stall,
+two low-weight outlier clusters, and positive and negative outliers from
+1e10 through `finfo.max` at H = 0.003 and 0.01. The sweep uses 1,200 arithmetic
+bisections to resolve even the widest brackets. A length-2048 noisy square
+wave with three netCDF fill values uses 256 bisections per stage over the
+full schedule. The Huber integer-data example saves its input and first
+component from independent bisection of the clipped linear score, with a
+single 1e30 outlier.
+
+```sh
+uv run python tests/data/generate_newton_reference.py /path/to/imf
+```
