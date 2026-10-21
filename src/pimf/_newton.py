@@ -57,7 +57,8 @@ def _newton_fit_windows(windows, weights, contrast, max_iter, tol):
         divisor = contrast.H / 256
         lookup = divisor * 256 == contrast.H and np.isfinite(8 * contrast.H)
     if lookup:
-        with np.errstate(over="ignore"):
+        # Unused table entries may overflow or underflow.
+        with np.errstate(over="ignore", under="ignore"):
             slope_table = (256.0 * _PADDED_DELTA) / contrast.H
         # Probes evaluate up to two estimates per row.
         shape = (min(block, 2 * len(windows)), windows.shape[1])

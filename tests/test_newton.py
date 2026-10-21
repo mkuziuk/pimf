@@ -747,6 +747,12 @@ def test_extreme_H_lookup_matches_generic_path(H):
         )
 
 
+def test_huge_H_slope_table_does_not_raise_underflow():
+    with np.errstate(under="raise"):
+        result = IMF(SmoothAbs(1e300), solver="newton").decompose(np.ones(3), window_sizes=[3])
+    np.testing.assert_array_equal(result.imfs, [[1.0, 1.0, 1.0]])
+
+
 def test_large_H_plateau_root_matches_generic_path():
     windows, weights = np.array([[-1.0, 0.0, 1.0]]), np.ones(3)
     for max_iter in (3, 100):
