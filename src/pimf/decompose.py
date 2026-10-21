@@ -1,5 +1,6 @@
 """Intrinsic multiscale filtering: the decomposition driver."""
 
+import warnings
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import nullcontext
 from dataclasses import dataclass
@@ -16,9 +17,13 @@ from .kernels import squared_triangle
 
 @dataclass(frozen=True)
 class StageInfo:
-    """Per-stage diagnostics; the closed-form path reports iterations=1 and
-    final_max_delta=nan. Parallel fits report maxima across chunks and converge
-    only when every chunk converges."""
+    """Per-stage diagnostics; unconverged windows hit max_iter with final updates
+    above tol * (1 + max(abs(x))), using each chunk's final estimates.
+    converged is True exactly when unconverged_windows is zero; this does not
+    bound distance to the score root. Parallel fits report maximum iterations
+    and final_max_delta across chunks and sum unconverged_windows. Direct solvers
+    report iterations=1 and final_max_delta=nan, with no unconverged windows.
+    """
 
     stage: int
     window_size: int
@@ -26,6 +31,7 @@ class StageInfo:
     final_max_delta: float
     bandwidth: float
     converged: bool
+    unconverged_windows: int = 0
 
 
 @dataclass
@@ -47,7 +53,8 @@ def _gd_fit_windows(windows, weights, contrast, max_iter, tol):
     """Minimize sum_u w_u * rho(window_u - x) per row by clipped gradient descent.
 
     Port of robust_gd_fit_windows from the research notebooks, generalized to
-    any contrast via psi and curvature. Returns (x, iterations, max_delta).
+    any contrast via psi and curvature. Returns the estimates, iteration count,
+    maximum final update and number of rows exceeding the chunk's stop threshold.
     """
     weights = weights / weights.sum()
     row_weights = weights.reshape(1, -1)
@@ -68,13 +75,18 @@ def _gd_fit_windows(windows, weights, contrast, max_iter, tol):
     for _ in range(max_iter):
         local_score = np.sum(row_weights * contrast.psi(windows - x[:, None]), axis=1)
         x_next = np.clip(x + step * local_score, lower, upper)
-        max_delta = float(np.max(np.abs(x_next - x)))
+        delta = np.abs(x_next - x)
+        max_delta = float(np.max(delta))
         x = x_next
         iterations += 1
-        if max_delta <= tol * (1.0 + float(np.max(np.abs(x)))):
+        # Keep the research stopping rule to preserve regression values.
+        threshold = tol * (1.0 + float(np.max(np.abs(x))))
+        if max_delta <= threshold:
             break
 
-    return x, iterations, max_delta
+    count_threshold = tol * (1.0 + float(np.nanmax(np.abs(x), initial=0.0)))
+    unconverged_windows = int(np.count_nonzero(~(delta <= count_threshold)))
+    return x, iterations, max_delta, unconverged_windows
 
 
 class IMF:
@@ -82,10 +94,20 @@ class IMF:
 
     Quadratic contrasts use their closed-form solver. Other contrasts use
     clipped gradient descent. Each decompose() call returns an independent result.
+    on_unconverged controls stages that hit max_iter with windows still moving:
+    "warn" emits RuntimeWarning, "raise" raises RuntimeError, "ignore" is silent.
     """
 
     def __init__(
-        self, contrast=None, kernel=None, *, boundary="wrap", max_iter=60, tol=1e-6, workers=1
+        self,
+        contrast=None,
+        kernel=None,
+        *,
+        boundary="wrap",
+        max_iter=60,
+        tol=1e-6,
+        workers=1,
+        on_unconverged="warn",
     ):
         if (
             isinstance(workers, (bool, np.bool_))
@@ -104,12 +126,19 @@ class IMF:
             or tol <= 0
         ):
             raise ValueError("tol must be finite and positive")
+        if not isinstance(on_unconverged, str) or on_unconverged not in (
+            "warn",
+            "raise",
+            "ignore",
+        ):
+            raise ValueError('on_unconverged must be "warn", "raise" or "ignore"')
         self.contrast = Quadratic() if contrast is None else contrast
         self.kernel = squared_triangle if kernel is None else kernel
         self.boundary = boundary
         self.max_iter = max_iter
         self.tol = tol
         self.workers = int(workers)
+        self.on_unconverged = on_unconverged
 
     def decompose(self, y, *, h1=0.25, a=SQRT_2, k_max=8, h_min=None, window_sizes=None):
         """Extract up to k_max components with h[k+1] = h[k] / a.
@@ -196,12 +225,8 @@ class IMF:
 
         def fit(windows, weights):
             if callable(solve):
-                return solve(windows, weights), 1, float("nan"), True
-            component, iterations, delta = _gd_fit_windows(
-                windows, weights, self.contrast, self.max_iter, self.tol
-            )
-            converged = delta <= self.tol * (1 + float(np.max(np.abs(component))))
-            return component, iterations, delta, bool(converged)
+                return solve(windows, weights), 1, float("nan"), 0
+            return _gd_fit_windows(windows, weights, self.contrast, self.max_iter, self.tol)
 
         chunk_size = (
             len(y) if self.workers == 1 else max(64, (len(y) + self.workers - 1) // self.workers)
@@ -218,16 +243,38 @@ class IMF:
                 padded = np.pad(residual, size // 2, mode=self.boundary)
                 windows = sliding_window_view(padded, size)
                 if executor is None:
-                    component, iterations, delta, converged = fit(windows, weights)
+                    component, iterations, delta, unconverged_windows = fit(windows, weights)
                 else:
                     fits = list(
                         executor.map(fit, (windows[chunk] for chunk in chunks), repeat(weights))
                     )
                     component = np.concatenate([part[0] for part in fits])
                     iterations = max(part[1] for part in fits)
-                    delta = max(part[2] for part in fits)
-                    converged = all(part[3] for part in fits)
+                    delta = float(np.max([part[2] for part in fits]))
+                    unconverged_windows = sum(part[3] for part in fits)
+                if unconverged_windows:
+                    noun = "window" if unconverged_windows == 1 else "windows"
+                    iteration_noun = "iteration" if iterations == 1 else "iterations"
+                    message = (
+                        f"Stage {stage} (window size {size}): {unconverged_windows} {noun} "
+                        f"did not converge after {iterations} {iteration_noun}. "
+                        'Increase max_iter or set on_unconverged="ignore".'
+                    )
+                    if self.on_unconverged == "raise":
+                        raise RuntimeError(message)
+                    if self.on_unconverged == "warn":
+                        warnings.warn(message, RuntimeWarning, stacklevel=2)
                 components.append(component)
                 residual = residual - component
-                stages.append(StageInfo(stage, size, iterations, delta, h, converged))
+                stages.append(
+                    StageInfo(
+                        stage,
+                        size,
+                        iterations,
+                        delta,
+                        h,
+                        unconverged_windows == 0,
+                        unconverged_windows,
+                    )
+                )
         return IMFResult(np.stack(components), residual, stages, window_sizes, bandwidths)

@@ -68,7 +68,7 @@ second_result = method.decompose(y, h1=0.15, k_max=5)</code></pre>
           <tr><td><code>result.reconstruction</code></td><td><code>imfs.sum(axis=0) + residual</code>.</td></tr>
           <tr><td><code>result.bandwidths</code></td><td>The normalized half-width used at each stage.</td></tr>
           <tr><td><code>result.window_sizes</code></td><td>The actual odd support sizes, in samples.</td></tr>
-          <tr><td><code>result.stages</code></td><td>Per-stage <code>stage</code>, <code>window_size</code>, <code>bandwidth</code>, <code>iterations</code>, <code>final_max_delta</code> and <code>converged</code>.</td></tr>
+          <tr><td><code>result.stages</code></td><td>Per-stage <code>stage</code>, <code>window_size</code>, <code>bandwidth</code>, <code>iterations</code>, <code>final_max_delta</code>, <code>converged</code> and <code>unconverged_windows</code>.</td></tr>
         </tbody>
       </table></div>
       <p>Sum selected components to keep particular scales. Adding every component and the residual reconstructs the original signal, including its noise.</p>
@@ -158,7 +158,18 @@ edge:     1 1 | 1 2 3 4 | 4 4</code></pre>
     tol=1e-8,
 )
 careful_result = careful.decompose(y, k_max=6)</code></pre>
-      <p>Check <code>stage.converged</code>: <code>False</code> means the estimate was returned before it met the tolerance. Increase <code>max_iter</code> to allow more work, or increase <code>tol</code> to accept a larger final update. This is separate from <code>k_max</code>, which limits the number of components.</p>
+      <p>Check <code>stage.converged</code>: <code>False</code> means the stage hit <code>max_iter</code> with windows still moving above the stopping threshold. Increase <code>max_iter</code> to allow more work, or increase <code>tol</code> to accept a larger final update. This is separate from <code>k_max</code>, which limits the number of components.</p>
+      <p>By default, each stage that hits this cap with unconverged windows emits one <code>RuntimeWarning</code> naming the stage number, window size and total number of unconverged rows across workers. Set <code>IMF(..., on_unconverged="raise")</code> to raise <code>RuntimeError</code>, or <code>on_unconverged="ignore"</code> to stay silent. Invalid policies raise <code>ValueError</code>.</p>
+      <p>The research iteration and its whole-chunk stopping rule are preserved to keep existing numerical results. Each row's final update uses the same threshold as the stop test, <code>tol * (1 + max(abs(x_chunk)))</code>, evaluated at the chunk's final estimates. A small update and <code>converged=True</code> do not bound distance to the score root. Non-finite updates also count as unconverged. Exact reconstruction does not prove that the components converged.</p>
+      <p>Long schedules and repeated decompositions can emit many per-stage warnings. For batch runs, set <code>on_unconverged="ignore"</code> and inspect <code>StageInfo.converged</code> and <code>unconverged_windows</code>, or use a Python <code>warnings</code> filter:</p>
+      <pre><code class="language-python">batch = IMF(SmoothAbs(0.2), on_unconverged="ignore").decompose(y)
+unfinished_counts = [stage.unconverged_windows for stage in batch.stages]
+
+import warnings
+
+with warnings.catch_warnings():
+    warnings.filterwarnings("ignore", message=r"Stage .* windows? did not converge", category=RuntimeWarning)
+    filtered = IMF(SmoothAbs(0.2)).decompose(y)</code></pre>
     </section>
     <section id="parallel">
       <h2>Parallel execution</h2>
@@ -171,7 +182,7 @@ parallel_result = parallel.decompose(y)</code></pre>
       <h2>Python API</h2>
       <h3><code>IMF</code></h3>
       <pre><code>IMF(contrast=None, kernel=None, *, boundary="wrap", max_iter=60,
-    tol=1e-6, workers=1)
+    tol=1e-6, workers=1, on_unconverged="warn")
 
 IMF.decompose(y, *, h1=0.25, a=sqrt(2), k_max=8,
               h_min=None, window_sizes=None) -&gt; IMFResult</code></pre>
@@ -192,7 +203,7 @@ contrast.curvature()             # positive global upper bound on rho''
 contrast.solve(windows, weights) # optional direct minimizer</code></pre>
       <p>Loss and score methods must accept NumPy arrays. A direct solver receives rows of local observations and a normalized weight vector, and returns one estimate per row. Without a direct solver, supply a finite positive curvature bound for a convex differentiable contrast. With multiple workers, contrast methods may run concurrently and must not mutate shared state or input arrays.</p>
       <h3><code>IMFResult</code> and <code>StageInfo</code></h3>
-      <p>See <a href="#results">Reading the result</a> for their fields. Each solver chunk converges when <code>final_max_delta &lt;= tol * (1 + max(abs(component)))</code>, using that chunk's values. A stage reports the maximum <code>iterations</code> and <code>final_max_delta</code> across chunks, and <code>converged=True</code> only if every chunk converged. With one worker, the whole stage is one chunk. Direct solvers report <code>iterations=1</code>, <code>final_max_delta=nan</code> and <code>converged=True</code>.</p>
+      <p>See <a href="#results">Reading the result</a> for their fields. <code>unconverged_windows</code> counts rows whose final update exceeds <code>tol * (1 + max(abs(x_chunk)))</code>, summed across chunks. A positive count means the iteration cap was hit. A stage reports the maximum <code>iterations</code> and <code>final_max_delta</code> across chunks, and <code>converged=True</code> exactly when <code>unconverged_windows=0</code>. With one worker, the whole stage is one chunk. Direct solvers, including custom <code>solve()</code> hooks, report <code>iterations=1</code>, <code>final_max_delta=nan</code>, <code>converged=True</code> and <code>unconverged_windows=0</code>.</p>
     </section>
     <section id="custom">
       <h2>Custom kernels &amp; contrasts</h2>
