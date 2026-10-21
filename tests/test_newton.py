@@ -37,13 +37,17 @@ def bisect_roots(windows, weights, contrast, iterations=100):
     return 0.5 * edges[0] + 0.5 * edges[1]
 
 
+# Saved slopes are 256 * differences of scores that match across platforms to 2e-15.
+SLOPE_ATOL = 256 * 2 * 2e-15
+
+
 @pytest.mark.parametrize("H", [0.01, 1.0, 10.0])
 def test_lookup_score_slope_and_H_scaling(reference, H):
     z = reference["slope_z"]
     midpoints = 0.5 * (z[:-1] + z[1:]) * H
     contrast = SmoothAbs(H)
     expected = reference["slope_lookup"][:-1] / H
-    np.testing.assert_allclose(contrast.psi_prime(midpoints), expected, rtol=1e-15, atol=1e-15)
+    np.testing.assert_allclose(contrast.psi_prime(midpoints), expected, rtol=0, atol=SLOPE_ATOL / H)
     eps = H / 2048
     difference = (contrast.psi(midpoints + eps) - contrast.psi(midpoints - eps)) / (2 * eps)
     np.testing.assert_allclose(contrast.psi_prime(midpoints), difference, rtol=0, atol=2e-12 / H)
@@ -52,7 +56,7 @@ def test_lookup_score_slope_and_H_scaling(reference, H):
 def test_lookup_slope_at_knots_and_outside_grid(reference):
     contrast = SmoothAbs(1)
     np.testing.assert_allclose(
-        contrast.psi_prime(reference["slope_z"]), reference["slope_lookup"], rtol=0, atol=0
+        contrast.psi_prime(reference["slope_z"]), reference["slope_lookup"], rtol=0, atol=SLOPE_ATOL
     )
     with np.errstate(all="raise"):
         np.testing.assert_allclose(
@@ -67,7 +71,7 @@ def test_lookup_slope_at_knots_and_outside_grid(reference):
             contrast.psi_prime([[np.nan, 0], [-np.inf, np.inf]]),
             [[np.nan, reference["slope_lookup"][2048]], [0, 0]],
             rtol=0,
-            atol=0,
+            atol=SLOPE_ATOL,
         )
     assert np.shape(contrast.psi_prime(0)) == ()
     assert contrast.psi_prime(np.empty((2, 0))).shape == (2, 0)
