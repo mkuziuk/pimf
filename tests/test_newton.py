@@ -424,6 +424,37 @@ def test_nonfinite_newton_estimate_is_not_done():
     assert np.isnan(delta) and np.isnan(score)
 
 
+@pytest.mark.parametrize(
+    ("window", "expected"),
+    [
+        ([0.1, -0.2, 0, np.inf, 0.3, -0.1, 0.2], 0.10780207441813276),
+        ([0.1, -0.2, 0, np.inf, 0.3, -np.inf, 0.2], None),
+        ([-np.inf, np.inf, 0.0], 0.0),
+    ],
+)
+def test_infinite_samples_give_finite_roots(window, expected):
+    window = np.array([window])
+    roots, _, _, unfinished, _, score = _newton_fit_windows(
+        window, np.ones(window.shape[1]), SmoothAbs(0.2), 100, 1e-12
+    )
+    assert unfinished == 0
+    assert np.isfinite(roots[0]) and np.isfinite(score)
+    if expected is not None:
+        np.testing.assert_allclose(roots[0], expected, rtol=0, atol=1e-12)
+
+
+@pytest.mark.parametrize("lookup", [True, False])
+def test_overflowed_residuals_keep_newton_finite(lookup):
+    big = np.finfo(float).max
+    y = np.r_[np.full(20, -big), big, np.full(20, -big), np.zeros(10)]
+    with np.errstate(over="ignore"):
+        result = IMF(
+            SmoothAbs(0.2, lookup=lookup), solver="newton", on_unconverged="raise"
+        ).decompose(y, k_max=4)
+    assert np.all(np.isfinite(result.imfs))
+    assert all(stage.converged for stage in result.stages)
+
+
 @pytest.mark.parametrize("workers", [1, 3])
 def test_identical_gd_runs_have_equal_stages(workers):
     y = np.random.default_rng(6).normal(size=129)

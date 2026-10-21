@@ -13,17 +13,18 @@ def _middle(lo, hi):
     ordered = np.where(m < 0, _SIGN - m, m).view(np.float64)
     with np.errstate(over="ignore", invalid="ignore"):
         wide = hi - lo > 2.0 * (1.0 + np.minimum(np.abs(lo), np.abs(hi)))
-    return np.where(wide, ordered, 0.5 * lo + 0.5 * hi)
+        return np.where(wide | np.isinf(lo) | np.isinf(hi), ordered, 0.5 * lo + 0.5 * hi)
 
 
 def _newton_fit_windows(windows, weights, contrast, max_iter, tol):
     """Return roots, max iterations/delta, unfinished count, fallbacks and score.
 
     Each row brackets a nonincreasing weighted score. Start at the weighted mean,
-    restarting at a weighted median if its slope is zero. The rtsafe safeguard bisects
-    unless Newton stays inside the bracket and reduces the step to less than
-    half the step before last. Wide brackets bisect float64 ranks to bound the
-    number of halvings across extreme outliers. Small steps need a positional bracket.
+    or at a weighted median if the mean is not finite or its slope is zero.
+    The rtsafe safeguard bisects unless Newton stays inside the bracket and
+    reduces the step to less than half the step before last. Wide brackets
+    bisect float64 ranks to bound the number of halvings across extreme
+    outliers. Small steps need a positional bracket.
     Flat zero intervals use the midpoint of their two boundaries, each located
     by bisection within the same cap.
     """
@@ -42,10 +43,18 @@ def _newton_fit_windows(windows, weights, contrast, max_iter, tol):
             residuals = windows[rows] - estimates[:, None]
             return np.sum(weights * contrast.psi_prime(residuals), axis=1)
 
+    def weighted_median(rows):
+        order = np.argsort(windows[rows], axis=1)
+        middle = np.argmax(np.cumsum(weights[order], axis=1) >= 0.5, axis=1)
+        return windows[rows, order[np.arange(len(rows)), middle]]
+
     lo, hi = windows.min(axis=1), windows.max(axis=1)
     with np.errstate(over="ignore", invalid="ignore"):
         x = np.clip(np.sum(windows * weights, axis=1), lo, hi)
         previous_step = hi - lo
+    # Infinite samples make the mean infinite or NaN; NaN samples stay unfinished.
+    reset_rows = np.flatnonzero(~np.isfinite(x) & ~np.isnan(lo) & ~np.isnan(hi))
+    x[reset_rows] = weighted_median(reset_rows)
     older_step = previous_step.copy()
     delta = np.zeros(len(x))
     done = lo == hi
@@ -87,9 +96,7 @@ def _newton_fit_windows(windows, weights, contrast, max_iter, tol):
             if iterations == 1 and np.any(slope == 0):
                 stalled = slope == 0
                 reset_rows = rows[stalled]
-                order = np.argsort(windows[reset_rows], axis=1)
-                middle = np.argmax(np.cumsum(weights[order], axis=1) >= 0.5, axis=1)
-                x[reset_rows] = windows[reset_rows, order[np.arange(len(reset_rows)), middle]]
+                x[reset_rows] = weighted_median(reset_rows)
                 score[stalled] = score_at(reset_rows, x[reset_rows])
                 slope[stalled] = slope_at(reset_rows, x[reset_rows])
             lo[rows] = np.where(score > 0, x[rows], lo[rows])
@@ -104,12 +111,13 @@ def _newton_fit_windows(windows, weights, contrast, max_iter, tol):
                 | (candidate > hi[rows])
                 | (np.abs(step) >= 0.5 * older_step[rows])
             )
-            midpoint = 0.5 * lo[rows] + 0.5 * hi[rows]
             candidate = np.where(bisect, _middle(lo[rows], hi[rows]), candidate)
             with np.errstate(over="ignore", invalid="ignore"):
+                midpoint = 0.5 * lo[rows] + 0.5 * hi[rows]
                 narrow = hi[rows] - lo[rows] <= tol * (
                     1.0 + np.maximum(np.abs(lo[rows]), np.abs(hi[rows]))
                 )
+            narrow &= np.isfinite(lo[rows]) & np.isfinite(hi[rows])
             candidate = np.where(narrow, midpoint, candidate)
             fallbacks += int(np.count_nonzero(bisect & ~narrow))
             finished = narrow.copy()
