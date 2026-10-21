@@ -20,14 +20,16 @@ from .kernels import squared_triangle
 class StageInfo:
     """Per-stage diagnostics; converged means unconverged_windows is zero.
 
-    GD counts final updates above tol * (1 + max(abs(x))) using each chunk's
-    final estimates; a zero count does not bound distance to the score root.
-    Newton counts rows still active at the cap, sums bisection fallbacks and
-    reports the largest absolute weighted score. Parallel fits report maximum
-    iterations and final_max_delta and sum unconverged_windows across chunks.
-    Direct solvers report iterations=1 and final_max_delta=nan, with no
-    unconverged windows. GD and direct solvers leave bisection_fallbacks=0 and
-    max_abs_score=nan.
+    GD counts rows failing delta <= tol * (1 + max(abs(x))) using each chunk's
+    final estimates, including NaNs. A zero count does not bound root distance.
+    Newton counts rows without a positional root bracket or resolved flat
+    interval at the cap; non-finite estimates or scores remain unconverged.
+    Iterative fits report the largest absolute weighted score at final estimates.
+    Parallel fits take maxima of iterations, final_max_delta and max_abs_score,
+    propagating NaN, and sum unconverged_windows and bisection_fallbacks.
+    Bisection counts include both flat-boundary searches and are zero for GD.
+    Direct solvers report iterations=1, final_max_delta=max_abs_score=nan,
+    bisection_fallbacks=0 and no unconverged windows.
     """
 
     stage: int
@@ -162,7 +164,7 @@ class IMF:
                 raise ValueError("solver='newton' requires contrast.psi_prime(r)")
             try:
                 self.contrast.psi_prime(np.zeros(1))
-            except (AttributeError, NotImplementedError) as error:
+            except NotImplementedError as error:
                 raise ValueError("solver='newton' requires contrast.psi_prime(r)") from error
 
     def decompose(self, y, *, h1=0.25, a=SQRT_2, k_max=8, h_min=None, window_sizes=None):
@@ -180,9 +182,10 @@ class IMF:
         workers > 1 fits contiguous chunks of windows in threads, with at least
         64 windows per chunk except the last. Stages remain sequential. Each
         GD chunk stops independently, so GD results can vary with workers near
-        the solver tolerance. Newton stops rows independently and is unaffected
-        by workers. Custom contrasts must support concurrent calls
-        without mutating shared state or their input arrays.
+        the solver tolerance. Newton stops rows independently; built-in contrasts
+        return bit-identical values and diagnostics across worker counts. Custom
+        contrasts must support concurrent calls without mutating shared state
+        or their input arrays.
         """
         y = np.asarray(y, dtype=float)
         if y.ndim != 1 or y.size == 0 or not np.all(np.isfinite(y)):
@@ -257,7 +260,17 @@ class IMF:
             component, iterations, delta, unconverged_windows = _gd_fit_windows(
                 windows, weights, self.contrast, self.max_iter, self.tol
             )
-            return component, iterations, delta, unconverged_windows, 0, float("nan")
+            score = np.sum(
+                (weights / weights.sum()) * self.contrast.psi(windows - component[:, None]), axis=1
+            )
+            return (
+                component,
+                iterations,
+                delta,
+                unconverged_windows,
+                0,
+                float(np.max(np.abs(score))),
+            )
 
         chunk_size = (
             len(y) if self.workers == 1 else max(64, (len(y) + self.workers - 1) // self.workers)
@@ -286,7 +299,7 @@ class IMF:
                     delta = float(np.max([part[2] for part in fits]))
                     unconverged_windows = sum(part[3] for part in fits)
                     fallbacks = sum(part[4] for part in fits)
-                    score = max(part[5] for part in fits)
+                    score = float(np.max([part[5] for part in fits]))
                 if unconverged_windows:
                     noun = "window" if unconverged_windows == 1 else "windows"
                     iteration_noun = "iteration" if iterations == 1 else "iterations"

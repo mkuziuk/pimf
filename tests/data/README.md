@@ -58,6 +58,9 @@ weights. It also contains an equal-weight two-cluster flat interval, score
 slopes, the issue #3 spike root, and all 17 components of the issue #3 bursty
 signal at L = 2048. Tests additionally bisect the library's score to distinguish
 solver error from interpolation roundoff, and compare with tightly converged GD.
+Adversarial cases cover grid-aligned and direct-score flat intervals, mirrored
+inputs, H=1e-14, and flat intervals at scales 1e2, 1e4 and 1e8. Their roots use
+the same independent research-score bisection.
 
 ```sh
 uv run python tests/data/generate_newton_reference.py /path/to/imf

@@ -8,12 +8,18 @@ def _newton_fit_windows(windows, weights, contrast, max_iter, tol):
 
     Each row brackets a nonincreasing weighted score. The rtsafe safeguard
     bisects unless Newton stays inside the bracket and reduces the step to
-    less than half the step before last. Flat zero intervals use the midpoint
-    of their two boundaries, each located by bisection within the same cap.
+    less than half the step before last. Small steps need a positional bracket.
+    Flat zero intervals use the midpoint of their two boundaries, each located
+    by bisection within the same cap.
     """
     positive = weights > 0
-    windows = windows[:, positive]
+    # A contiguous reduction axis keeps singleton chunks on the same sum path.
+    windows = np.ascontiguousarray(windows[:, positive], dtype=float)
     weights = weights[positive] / weights[positive].sum()
+
+    def score_at(rows, estimates):
+        return np.sum(weights * contrast.psi(windows[rows] - estimates[:, None]), axis=1)
+
     x = np.sum(windows * weights, axis=1)
     lo, hi = windows.min(axis=1), windows.max(axis=1)
     previous_step = hi - lo
@@ -29,24 +35,33 @@ def _newton_fit_windows(windows, weights, contrast, max_iter, tol):
         iterations += 1
         rows = np.flatnonzero(~done & ~flat)
         if rows.size:
-            residuals = windows[rows] - x[rows, None]
-            score = np.sum(weights * contrast.psi(residuals), axis=1)
-            slope = np.sum(weights * contrast.psi_prime(residuals), axis=1)
-            at_zero = score == 0
-            plateau = at_zero & (slope == 0) & (lo[rows] < hi[rows])
-            flat[rows[plateau]] = True
-            zero_left[rows[plateau]] = x[rows[plateau]]
-            zero_right[rows[plateau]] = x[rows[plateau]]
-            done[rows[at_zero & ~plateau]] = True
-            delta[rows[at_zero & ~plateau]] = 0.0
+            score = score_at(rows, x[rows])
+            finite = np.isfinite(score) & np.isfinite(x[rows])
+            delta[rows[~finite]] = np.nan
+            rows, score = rows[finite], score[finite]
+            zeros = rows[score == 0]
+            if zeros.size:
+                epsilon = tol * (1.0 + np.abs(x[zeros]))
+                left_score = score_at(zeros, x[zeros] - epsilon)
+                right_score = score_at(zeros, x[zeros] + epsilon)
+                finite = np.isfinite(left_score) & np.isfinite(right_score)
+                plateau = (
+                    finite & ((left_score == 0) | (right_score == 0)) & (lo[zeros] < hi[zeros])
+                )
+                flat[zeros[plateau]] = True
+                zero_left[zeros[plateau]] = x[zeros[plateau]]
+                zero_right[zeros[plateau]] = x[zeros[plateau]]
+                done[zeros] = finite & ~plateau
+                delta[zeros] = np.where(finite, 0.0, np.nan)
 
-            moving = ~at_zero
-            rows, score, slope = rows[moving], score[moving], slope[moving]
+            moving = score != 0
+            rows, score = rows[moving], score[moving]
+            slope = np.sum(weights * contrast.psi_prime(windows[rows] - x[rows, None]), axis=1)
             lo[rows] = np.where(score > 0, x[rows], lo[rows])
             hi[rows] = np.where(score < 0, x[rows], hi[rows])
             step = np.full(len(rows), np.inf)
             with np.errstate(over="ignore", invalid="ignore", divide="ignore"):
-                np.divide(score, slope, out=step, where=slope > 0)
+                np.divide(score, slope, out=step, where=(slope > 0) & np.isfinite(slope))
                 candidate = x[rows] + step
             bisect = (
                 ~np.isfinite(candidate)
@@ -56,21 +71,54 @@ def _newton_fit_windows(windows, weights, contrast, max_iter, tol):
             )
             midpoint = 0.5 * lo[rows] + 0.5 * hi[rows]
             candidate = np.where(bisect, midpoint, candidate)
-            narrow = hi[rows] - lo[rows] <= tol * (1.0 + np.abs(x[rows]))
+            narrow = hi[rows] - lo[rows] <= tol * (
+                1.0 + np.maximum(np.abs(lo[rows]), np.abs(hi[rows]))
+            )
             candidate = np.where(narrow, midpoint, candidate)
             fallbacks += int(np.count_nonzero(bisect & ~narrow))
+            finished = narrow.copy()
+            small = (np.abs(candidate - x[rows]) <= tol * (1.0 + np.abs(candidate))) & ~narrow
+            if np.any(small):
+                probe_rows = rows[small]
+                epsilon = tol * (1.0 + np.abs(candidate[small]))
+                left, right = candidate[small] - epsilon, candidate[small] + epsilon
+                left_score, right_score = score_at(probe_rows, left), score_at(probe_rows, right)
+                finite = np.isfinite(left_score) & np.isfinite(right_score)
+                zero_hit = finite & ((left_score == 0) | (right_score == 0))
+                bracketed = finite & (left_score >= 0) & (right_score <= 0)
+                finished[small] = bracketed & ~zero_hit
+                lo[probe_rows] = np.where(
+                    left_score > 0, np.maximum(lo[probe_rows], left), lo[probe_rows]
+                )
+                lo[probe_rows] = np.where(
+                    right_score > 0, np.maximum(lo[probe_rows], right), lo[probe_rows]
+                )
+                hi[probe_rows] = np.where(
+                    left_score < 0, np.minimum(hi[probe_rows], left), hi[probe_rows]
+                )
+                hi[probe_rows] = np.where(
+                    right_score < 0, np.minimum(hi[probe_rows], right), hi[probe_rows]
+                )
+                next_x = np.where(left_score == 0, left, right)
+                retry = ~bracketed & ~zero_hit
+                next_x = np.where(retry, 0.5 * lo[probe_rows] + 0.5 * hi[probe_rows], next_x)
+                candidate[small] = np.where(finished[small], candidate[small], next_x)
+                fallbacks += int(np.count_nonzero(retry))
             delta[rows] = np.abs(candidate - x[rows])
             older_step[rows] = previous_step[rows]
             previous_step[rows] = delta[rows]
             x[rows] = candidate
-            done[rows] = narrow | (delta[rows] <= tol * (1.0 + np.abs(candidate)))
+            done[rows] = finished
 
         rows = np.flatnonzero(flat & ~done)
         if rows.size:
             left = 0.5 * lo[rows] + 0.5 * zero_left[rows]
             right = 0.5 * zero_right[rows] + 0.5 * hi[rows]
-            left_score = np.sum(weights * contrast.psi(windows[rows] - left[:, None]), axis=1)
-            right_score = np.sum(weights * contrast.psi(windows[rows] - right[:, None]), axis=1)
+            left_score, right_score = score_at(rows, left), score_at(rows, right)
+            finite = np.isfinite(left_score) & np.isfinite(right_score)
+            delta[rows[~finite]] = np.nan
+            rows, left, right = rows[finite], left[finite], right[finite]
+            left_score, right_score = left_score[finite], right_score[finite]
             lo[rows] = np.where(left_score > 0, left, lo[rows])
             zero_left[rows] = np.where(left_score > 0, zero_left[rows], left)
             hi[rows] = np.where(right_score < 0, right, hi[rows])
@@ -79,13 +127,18 @@ def _newton_fit_windows(windows, weights, contrast, max_iter, tol):
             delta[rows] = np.abs(midpoint - x[rows])
             x[rows] = midpoint
             uncertainty = np.maximum(zero_left[rows] - lo[rows], hi[rows] - zero_right[rows])
-            done[rows] = uncertainty <= tol * (1.0 + np.abs(midpoint))
+            done[rows] = uncertainty <= tol * (
+                1.0 + np.maximum(np.abs(zero_left[rows]), np.abs(zero_right[rows]))
+            )
             fallbacks += 2 * len(rows)
 
         if np.all(done):
             break
 
-    score = np.sum(weights * contrast.psi(windows - x[:, None]), axis=1)
+    score = score_at(np.arange(len(x)), x)
+    finite = np.isfinite(x) & np.isfinite(score)
+    done &= finite
+    delta[~finite] = np.nan
     return (
         x,
         iterations,

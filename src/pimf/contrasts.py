@@ -130,9 +130,9 @@ class SmoothAbs(Contrast):
         """
         r = np.asarray(r, dtype=float)
         if not self.lookup:
-            return SQRT_2_OVER_PI / self.H * np.exp(-0.5 * (r / self.H) ** 2)
+            return (SQRT_2_OVER_PI * np.exp(-0.5 * (r / self.H) ** 2)) / self.H
         index, _ = _lookup_coordinates(r, self.H)
-        slope = _SCORE_DELTA[index] * (256.0 / self.H)
+        slope = (256.0 * _SCORE_DELTA[index]) / self.H
         slope = np.where(np.abs(r) > 8.0 * self.H, 0.0, slope)
         return np.where(np.isnan(r), np.nan, slope)
 

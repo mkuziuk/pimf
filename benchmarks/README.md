@@ -26,19 +26,21 @@ The script uses one worker and the full schedule from `h1=0.25` down to
 with Newton at `max_iter=100, tol=1e-12`. After one warmup, three runs alternate
 solver order. Input generation and imports are outside the timed region.
 JSON output records all timings, environment details and Newton stage diagnostics.
+GD includes its final score diagnostic evaluation; Newton includes the score
+probes that verify positional accuracy before accepting a small step.
 Both solvers use `on_unconverged="ignore"` to keep warnings for intentionally
 capped GD stages out of the timed region; convergence diagnostics are retained.
 
 Measured on an Apple M4 Max, macOS 26.6.2, Python 3.13.13 and NumPy 2.5.1,
 with the thread limits above, median wall times were:
 
-- L=1024: GD 0.3534 s, Newton 0.0646 s, a 5.47x speedup.
-- L=2048: GD 1.3874 s, Newton 0.2160 s, a 6.42x speedup.
-- L=4096: GD 5.6286 s, Newton 0.9278 s, a 6.07x speedup.
+- L=1024: GD 0.4101 s, Newton 0.0930 s, a 4.41x speedup.
+- L=2048: GD 1.5620 s, Newton 0.3052 s, a 5.12x speedup.
+- L=4096: GD 6.3111 s, Newton 1.2129 s, a 5.20x speedup.
 
 Every Newton window converged in at most six iterations, with no bisection
 fallbacks on these three signals. Their largest absolute returned scores
-were at most 1.01e-15. Default GD capped 7 of 15, 9 of 17 and 11 of 19 stages,
+were at most 1.13e-15. Default GD capped 7 of 15, 9 of 17 and 11 of 19 stages,
 respectively. At L=2048, its component-and-residual stack differed from
 Newton by 14.04% in relative L2, reproducing issue #3.
 

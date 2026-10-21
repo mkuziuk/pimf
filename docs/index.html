@@ -68,12 +68,28 @@ second_result = method.decompose(y, h1=0.15, k_max=5)</code></pre>
           <tr><td><code>result.reconstruction</code></td><td><code>imfs.sum(axis=0) + residual</code>.</td></tr>
           <tr><td><code>result.bandwidths</code></td><td>The normalized half-width used at each stage.</td></tr>
           <tr><td><code>result.window_sizes</code></td><td>The actual odd support sizes, in samples.</td></tr>
-          <tr><td><code>result.stages</code></td><td>Per-stage <code>stage</code>, <code>window_size</code>, <code>bandwidth</code>, <code>iterations</code>, <code>final_max_delta</code>, <code>converged</code> and <code>unconverged_windows</code>. Newton also reports <code>bisection_fallbacks</code> and <code>max_abs_score</code>.</td></tr>
+          <tr><td><code>result.stages</code></td><td>Per-stage <code>stage</code>, <code>window_size</code>, <code>bandwidth</code>, <code>iterations</code>, <code>final_max_delta</code>, <code>converged</code> and <code>unconverged_windows</code>. Also includes <code>bisection_fallbacks</code> and <code>max_abs_score</code>.</td></tr>
         </tbody>
       </table></div>
       <p>Sum selected components to keep particular scales. Adding every component and the residual reconstructs the original signal, including its noise.</p>
       <pre><code class="language-python">unfinished = [stage.stage for stage in result.stages if not stage.converged]
 coarse_signal = result.imfs[:2].sum(axis=0)</code></pre>
+      <h3>Stage diagnostics</h3>
+      <div class="table-scroll"><table>
+        <thead><tr><th><code>StageInfo</code> field</th><th>Meaning</th></tr></thead>
+        <tbody>
+          <tr><td><code>stage</code></td><td>Stage number, starting at one.</td></tr>
+          <tr><td><code>window_size</code></td><td>Odd support size in samples.</td></tr>
+          <tr><td><code>bandwidth</code></td><td>Normalized window half-width.</td></tr>
+          <tr><td><code>iterations</code></td><td>Maximum iteration count across windows or GD chunks.</td></tr>
+          <tr><td><code>final_max_delta</code></td><td>Largest final absolute update, propagating NaN across workers.</td></tr>
+          <tr><td><code>converged</code></td><td>Whether <code>unconverged_windows</code> is zero.</td></tr>
+          <tr><td><code>unconverged_windows</code></td><td>GD rows failing their chunk's final update threshold, or Newton rows still active at the cap. Non-finite Newton scores or estimates remain unconverged. Counts sum across workers.</td></tr>
+          <tr><td><code>bisection_fallbacks</code></td><td>Total Newton bisections, including both flat-boundary searches; zero for GD and direct fits.</td></tr>
+          <tr><td><code>max_abs_score</code></td><td>Largest absolute normalized weighted score at the returned estimates, for GD and Newton. Maxima across workers propagate NaN.</td></tr>
+        </tbody>
+      </table></div>
+      <p>GD computes <code>max_abs_score</code> with one extra score evaluation after fitting, preserving its updates, stopping iterations and final deltas. This diagnoses root quality even when GD reports convergence. Direct fits report one iteration, zero unconverged windows, and NaN for <code>final_max_delta</code> and <code>max_abs_score</code>.</p>
     </section>
     <section id="schedule">
       <h2>Window schedule</h2>
@@ -158,7 +174,7 @@ edge:     1 1 | 1 2 3 4 | 4 4</code></pre>
     tol=1e-8,
 )
 careful_result = careful.decompose(y, k_max=6)</code></pre>
-      <p>Check <code>stage.converged</code>: <code>False</code> means the stage hit <code>max_iter</code> with unconverged windows. Increase <code>max_iter</code> to allow more work, or increase <code>tol</code> to accept a larger final update. This is separate from <code>k_max</code>, which limits the number of components.</p>
+      <p>Check <code>stage.converged</code>: <code>False</code> means the stage hit <code>max_iter</code> with unconverged windows. Increase <code>max_iter</code> to allow more work, or increase <code>tol</code> to accept lower accuracy. This is separate from <code>k_max</code>, which limits the number of components.</p>
       <p>By default, each stage that hits this cap with unconverged windows emits one <code>RuntimeWarning</code> naming the stage number, window size and total number of unconverged rows across workers. Set <code>IMF(..., on_unconverged="raise")</code> to raise <code>RuntimeError</code>, or <code>on_unconverged="ignore"</code> to stay silent. Invalid policies raise <code>ValueError</code>.</p>
       <p>The GD research iteration and its whole-chunk stopping rule are preserved to keep existing numerical results. Each row's final update uses the same threshold as the stop test, <code>tol * (1 + max(abs(x_chunk)))</code>, evaluated at the chunk's final estimates. For GD, a small update and <code>converged=True</code> do not bound distance to the score root. Non-finite updates also count as unconverged. Exact reconstruction does not prove that the components converged.</p>
       <p>Long schedules and repeated decompositions can emit many per-stage warnings. For batch runs, set <code>on_unconverged="ignore"</code> and inspect <code>StageInfo.converged</code> and <code>unconverged_windows</code>, or use a Python <code>warnings</code> filter:</p>
@@ -174,17 +190,18 @@ with warnings.catch_warnings():
       <pre><code class="language-python">newton = IMF(SmoothAbs(H=0.2), solver="newton")
 newton_result = newton.decompose(y)
 unfinished_windows = sum(stage.unconverged_windows for stage in newton_result.stages)</code></pre>
-      <p>Newton defaults to <code>max_iter=100</code> and <code>tol=1e-12</code>. Explicit values override these defaults. Each window starts at its weighted mean, with a bracket from the minimum and maximum samples having nonzero weight. The solver bisects if a Newton candidate is non-finite, leaves the bracket, or fails to reduce the step below half the step before last. It stops each row when the update or bracket width is within <code>tol * (1 + abs(x))</code>.</p>
-      <p>Newton uses pure NumPy and solves the same weighted score equation as GD. Differences beyond stopping roundoff occur where GD has not reached that root, including some fits marked converged by GD's small-update test. When the lookup score is zero on an interval, Newton bisects to locate both boundaries and returns their midpoint. GD can return another zero on that interval.</p>
-      <p>Newton uses the same <code>on_unconverged</code> policy as GD. Its default tolerance targets roots to about 1e-12 relative accuracy; it does not remove the lookup table's approximation error.</p>
-      <p>On the issue #3 bursty signal at lengths 1024, 2048 and 4096, Newton was 5.47x, 6.42x and 6.07x faster than default GD. Every Newton window converged in at most six iterations, with no bisection fallbacks. These are median wall times from three alternating runs after a warmup, with one worker on an Apple M4 Max, macOS 26.6.2, Python 3.13.13 and NumPy 2.5.1. Reproduce them with <code>uv run python benchmarks/newton.py</code> from the repository; the benchmark README lists thread limits and absolute timings.</p>
+      <p>Newton defaults to <code>max_iter=100</code> and <code>tol=1e-12</code>. Explicit values override these defaults. Each window starts at its weighted mean, with a bracket from the minimum and maximum samples having nonzero weight. The solver bisects if a Newton candidate is non-finite, leaves the bracket, or fails to reduce the step below half the step before last. A small step alone cannot stop a row: the scores at <code>x ± tol * (1 + abs(x))</code> must bracket a root. A narrow bracket also finishes a row when its width is at most <code>tol * (1 + max(abs(lo), abs(hi)))</code>.</p>
+      <p>Use Newton when robust GD fits take too long to reach the root, particularly with outliers or separated clusters. Newton uses pure NumPy and solves the same weighted score equation as GD. Differences beyond stopping roundoff occur where GD has not reached that root, including some fits marked converged by GD's small-update test. When the score is exactly zero on an interval in either lookup mode, Newton bisects to locate both boundaries and returns their midpoint. The boundary searches stop at <code>tol * (1 + max(abs(edges)))</code>. GD can return another zero on that interval.</p>
+      <p>Newton uses the same <code>on_unconverged</code> policy as GD. Non-finite scores or estimates remain unconverged. Its default tolerance resolves root position to about <code>tol * (1 + abs(x))</code>; it does not remove the lookup table's approximation error. When <code>H &lt;&lt; tol * abs(x)</code>, <code>max_abs_score</code> can remain large because the score is steep, even though the position meets tolerance. This is expected.</p>
+      <p>Each Newton iteration evaluates the score and its slope, and may add score probes or bisections. Fewer iterations can offset that extra cost.</p>
+      <p>On the issue #3 bursty signal at lengths 1024, 2048 and 4096, Newton was 4.41x, 5.12x and 5.20x faster than default GD. Every Newton window converged in at most six iterations, with no bisection fallbacks. These are median wall times from three alternating runs after a warmup, with one worker on an Apple M4 Max, macOS 26.6.2, Python 3.13.13 and NumPy 2.5.1. Reproduce them with <code>uv run python benchmarks/newton.py</code> from the repository; the benchmark README lists thread limits and absolute timings.</p>
     </section>
     <section id="parallel">
       <h2>Parallel execution</h2>
       <pre><code class="language-python">parallel = IMF(contrast=SmoothAbs(H=0.2), kernel=epanechnikov, workers=4)
 parallel_result = parallel.decompose(y)</code></pre>
       <p><code>workers</code> is a positive integer and defaults to <code>1</code>. Larger values fit chunks of windows in separate threads. Stages still run in order because each uses the previous residual. Short signals use fewer threads, with at least 64 windows per chunk except the last.</p>
-      <p>GD chunks stop independently, so changing <code>workers</code> can change GD results near the solver tolerance. Newton stops windows independently and returns identical values and diagnostics for every worker count. More workers may help large robust fits, but thread overhead can slow small signals or direct weighted means. Compare timings on your data.</p>
+      <p>GD chunks stop independently, so changing <code>workers</code> can change GD results near the solver tolerance. Newton stops windows independently. With the built-in contrasts, its values and diagnostics are bit-identical across worker counts, including singleton chunks. More workers may help large robust fits, but thread overhead can slow small signals or direct weighted means. Compare timings on your data.</p>
     </section>
     <section id="api">
       <h2>Python API</h2>
@@ -213,8 +230,7 @@ contrast.solve(windows, weights) # optional direct minimizer</code></pre>
       <p>Loss and score methods must accept NumPy arrays. A direct solver receives rows of local observations and a normalized weight vector, and returns one estimate per row. It takes precedence over <code>solver</code>. Otherwise, supply a convex contrast with a nondecreasing score and <code>psi(0)=0</code>. GD needs a finite positive curvature bound. Newton needs <code>psi_prime(r)</code>; selecting Newton without it raises <code>ValueError</code>. With multiple workers, contrast methods may run concurrently and must not mutate shared state or input arrays.</p>
       <p><code>SmoothAbs.psi_prime(r)</code> includes the factor <code>1/H</code>. Lookup evaluation returns the exact slope of the piecewise-linear score, using the right-hand slope at knots and zero beyond the grid. With <code>lookup=False</code> it returns <code>sqrt(2/pi)/H * exp(-r**2/(2*H**2))</code>, while <code>psi</code> keeps the research erf approximation.</p>
       <h3><code>IMFResult</code> and <code>StageInfo</code></h3>
-      <p>See <a href="#results">Reading the result</a> for their fields. For GD, <code>unconverged_windows</code> counts rows whose final update exceeds <code>tol * (1 + max(abs(x_chunk)))</code>, summed across chunks. A positive count means the iteration cap was hit. A stage reports the maximum <code>iterations</code> and <code>final_max_delta</code> across chunks, and <code>converged=True</code> exactly when <code>unconverged_windows=0</code>. With one worker, the whole stage is one chunk. Direct solvers, including custom <code>solve()</code> hooks, report <code>iterations=1</code>, <code>final_max_delta=nan</code>, <code>converged=True</code> and <code>unconverged_windows=0</code>.</p>
-      <p>For Newton, <code>iterations</code> is the maximum across windows and <code>final_max_delta</code> is the maximum of their final updates. <code>converged</code> means every window met its own tolerance; <code>unconverged_windows</code> counts those still active at the cap. <code>bisection_fallbacks</code> sums bisections over windows, counting both boundary searches for a flat interval. <code>max_abs_score</code> is the largest absolute weighted score at a returned estimate. GD and closed-form fits leave <code>bisection_fallbacks=0</code> and <code>max_abs_score=nan</code>.</p>
+      <p>See <a href="#results">Reading the result</a> for all fields. For GD, <code>unconverged_windows</code> counts rows failing <code>delta &lt;= tol * (1 + max(abs(x_chunk)))</code>, including NaNs. With one worker, the whole stage is one chunk. For Newton, it counts rows still active at the cap. Both solvers report the final <code>max_abs_score</code>. <code>final_max_delta</code> and <code>max_abs_score</code> propagate NaN across workers.</p>
     </section>
     <section id="custom">
       <h2>Custom kernels &amp; contrasts</h2>
@@ -247,10 +263,14 @@ class Huber(Contrast):
     def psi(self, r):
         return np.clip(r, -self.delta, self.delta)
 
+    def psi_prime(self, r):
+        return (np.abs(r) &lt; self.delta).astype(float)
+
     def curvature(self):
         return 1.0
 
-huber_result = IMF(contrast=Huber(0.3)).decompose(y)</code></pre>
+huber_result = IMF(contrast=Huber(0.3), solver="newton").decompose(y)</code></pre>
+      <p><code>psi_prime</code> is optional for GD. For Newton, it must return the vectorized score slope in raw residual units; this Huber score has slope one inside the quadratic region and zero outside.</p>
     </section>
     <footer><span>pimf · NumPy-only intrinsic multiscale filtering</span><a href="https://github.com/mkuziuk/pimf/blob/main/LICENSE">MIT license</a><a href="#overview">Back to top ↑</a></footer>
   </main>

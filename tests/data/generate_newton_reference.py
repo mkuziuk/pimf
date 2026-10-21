@@ -29,7 +29,7 @@ grid = namespace["make_lookup_grid"]()
 def roots(windows, weights, H, lookup=True):
     """Bisect both edges of the zero set, including flat score intervals."""
     positive = weights > 0
-    windows, weights = windows[:, positive], weights[positive]
+    windows, weights = windows[:, positive].astype(float), weights[positive]
     weights = weights / weights.sum()
     boundaries = []
     for right_edge in (False, True):
@@ -84,6 +84,25 @@ spike_weights /= spike_weights.sum()
 fixture["spike_weights"] = spike_weights
 fixture["spike_window"] = np.array([[0.0, 0.0, 0.0, 100.0, 0.0, 0.0, 0.0]])
 fixture["spike_root"] = roots(fixture["spike_window"], spike_weights, 1.0)
+
+
+fixture["adversarial_windows"] = np.array([[-192.0, -8.0, 100.0], [-20.0, -10.0, 20.0]])
+fixture["adversarial_weights"] = np.array([0.25, 0.25, 0.5])
+fixture["adversarial_triangle_windows"] = np.array(
+    [[0.0, -168.0, 100.0, 0.0, 0.0], [0.0, -160.0, 100.0, 0.0, 0.0]]
+)
+fixture["adversarial_triangle_weights"] = np.array([0.0, 0.25, 0.5, 0.25, 0.0])
+fixture["tiny_H_window"] = np.array([[-3.0, 0.0, 1.0, 1.0, 1.0]])
+fixture["wide_windows"] = np.array([[-A, -A, A] for A in (1e2, 1e4, 1e8)])
+for lookup in (False, True):
+    for prefix in ("adversarial", "adversarial_triangle"):
+        fixture[prefix + f"_roots_{lookup}"] = roots(
+            fixture[prefix + "_windows"], fixture[prefix + "_weights"], 1.0, lookup
+        )
+    fixture[f"tiny_H_root_{lookup}"] = roots(fixture["tiny_H_window"], np.ones(5), 1e-14, lookup)
+    fixture[f"wide_roots_{lookup}"] = roots(
+        fixture["wide_windows"], fixture["adversarial_weights"], 1.0, lookup
+    )
 
 n = 2048
 t = np.arange(n)
