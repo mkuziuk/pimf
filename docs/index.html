@@ -168,7 +168,7 @@ unfinished_counts = [stage.unconverged_windows for stage in batch.stages]
 import warnings
 
 with warnings.catch_warnings():
-    warnings.filterwarnings("ignore", message=r"Stage .* windows did not converge", category=RuntimeWarning)
+    warnings.filterwarnings("ignore", message=r"Stage .* windows? did not converge", category=RuntimeWarning)
     filtered = IMF(SmoothAbs(0.2)).decompose(y)</code></pre>
     </section>
     <section id="parallel">

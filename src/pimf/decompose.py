@@ -253,9 +253,12 @@ class IMF:
                     delta = float(np.max([part[2] for part in fits]))
                     unconverged_windows = sum(part[3] for part in fits)
                 if unconverged_windows:
+                    noun = "window" if unconverged_windows == 1 else "windows"
+                    iteration_noun = "iteration" if iterations == 1 else "iterations"
                     message = (
-                        f"Stage {stage} (window size {size}): {unconverged_windows} windows "
-                        f"did not converge after {iterations} iterations"
+                        f"Stage {stage} (window size {size}): {unconverged_windows} {noun} "
+                        f"did not converge after {iterations} {iteration_noun}. "
+                        'Increase max_iter or set on_unconverged="ignore".'
                     )
                     if self.on_unconverged == "raise":
                         raise RuntimeError(message)

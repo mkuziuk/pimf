@@ -22,13 +22,23 @@ def test_issue_3_spike_warns_by_default(spike):
     assert len(caught) == 1
     assert caught[0].filename == __file__
     assert str(caught[0].message) == (
-        f"Stage 1 (window size 7): {stage.unconverged_windows} windows "
-        "did not converge after 60 iterations"
+        "Stage 1 (window size 7): 1 window "
+        'did not converge after 60 iterations. Increase max_iter or set on_unconverged="ignore".'
     )
     assert stage.iterations == 60
     assert not stage.converged
     assert stage.unconverged_windows > 0
     np.testing.assert_allclose(result.imfs[0, len(spike) // 2], 2.43134204, rtol=0, atol=5e-9)
+
+
+def test_one_unconverged_window_uses_singular_message():
+    with pytest.warns(RuntimeWarning) as caught:
+        result = IMF(SmoothAbs(1), max_iter=1, tol=0.1).decompose([4, 4, 4, 4, 3], window_sizes=[5])
+    assert result.stages[0].unconverged_windows == 1
+    assert str(caught[0].message) == (
+        "Stage 1 (window size 5): 1 window did not converge after 1 iteration. "
+        'Increase max_iter or set on_unconverged="ignore".'
+    )
 
 
 @pytest.mark.parametrize("workers", [1, 4])
@@ -41,7 +51,8 @@ def test_unconverged_policy_and_total_count_across_chunks(spike, workers, policy
     y = np.tile(spike, 4)
     method = IMF(SmoothAbs(1.0), workers=workers, on_unconverged=policy)
     message = (
-        f"Stage 1 (window size 7): {expected_count} windows did not converge after 60 iterations"
+        f"Stage 1 (window size 7): {expected_count} windows did not converge after 60 iterations. "
+        'Increase max_iter or set on_unconverged="ignore".'
     )
     if policy == "raise":
         with pytest.raises(RuntimeError, match=re.escape(message)):
@@ -100,7 +111,8 @@ def test_issue_3_bursty_signal_warns_at_defaults():
         assert str(warning.message) == (
             f"Stage {stage.stage} (window size {stage.window_size}): "
             f"{stage.unconverged_windows} windows did not converge "
-            f"after {stage.iterations} iterations"
+            f"after {stage.iterations} iterations. "
+            'Increase max_iter or set on_unconverged="ignore".'
         )
     np.testing.assert_allclose(result.reconstruction, y, rtol=0, atol=1e-12)
 

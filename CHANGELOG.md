@@ -15,6 +15,15 @@
   and inspect `StageInfo.converged` / `unconverged_windows`, or use a Python
   `warnings` filter. Long schedules and repeated runs can emit many warnings.
 
+### Upgrading from 0.4.0
+
+`IMF.on_unconverged` is a new configuration attribute. Default GD now emits
+`RuntimeWarning` on capped stages, so suites using `-W error` or
+`filterwarnings=error` may fail. Set `on_unconverged="ignore"` or add a warning
+filter. `StageInfo` gained the defaulted `unconverged_windows` field: existing
+positional construction still works, but `dataclasses.astuple()` returns one
+more item.
+
 ## 0.4.0
 
 - `SmoothAbs(H)` now uses precomputed score and exponential tables with uniform
