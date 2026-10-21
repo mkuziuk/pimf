@@ -681,3 +681,69 @@ def test_outlier_magnitude_sweep_matches_independent_bisection(reference, size, 
     np.testing.assert_allclose(
         roots, bisect_roots(windows, weights, contrast, iterations=1200), rtol=2e-12, atol=2e-12
     )
+
+
+class GenericSmoothAbs(SmoothAbs):
+    """SmoothAbs evaluated through the generic psi and psi_prime path."""
+
+
+def weighted_scores(windows, weights, contrast, roots):
+    positive = weights > 0
+    residuals = windows[:, positive] - roots[:, None]
+    return np.sum(weights[positive] / weights[positive].sum() * contrast.psi(residuals), axis=1)
+
+
+@pytest.mark.parametrize("H", [0.01, 1.0, 10.0])
+@pytest.mark.parametrize("size", [3, 65, 1025])
+def test_fused_lookup_matches_generic_score_path(reference, H, size):
+    prefix = f"h{[0.01, 1.0, 10.0].index(H)}_w{size}_"
+    windows, weights = reference[prefix + "windows"], reference[prefix + "weights"]
+    fused = _newton_fit_windows(windows, weights, SmoothAbs(H), 100, 1e-12)
+    generic = _newton_fit_windows(windows, weights, GenericSmoothAbs(H), 100, 1e-12)
+    assert fused[3] == generic[3] == 0
+    np.testing.assert_allclose(fused[0], generic[0], rtol=2e-12, atol=2e-12)
+    scores = weighted_scores(windows, weights, SmoothAbs(H), fused[0])
+    assert fused[5] == pytest.approx(np.max(np.abs(scores)), rel=0, abs=1e-14)
+
+
+def test_fused_lookup_matches_generic_path_on_nonfinite_and_extreme_samples():
+    big = np.finfo(float).max
+    windows = np.array(
+        [
+            [0.1, -0.2, np.inf, 0.3, -np.inf],
+            [np.nan, 0.0, 1.0, 2.0, 3.0],
+            [big, -big, 0.0, 0.1, 0.2],
+            [big, big, big, 0.0, big],
+            [np.inf, np.inf, np.inf, 0.0, 1.0],
+            [-8.0, -7.999, 0.0, 7.999, 8.0],
+        ]
+    )
+    weights = np.array([1.0, 2.0, 3.0, 2.0, 1.0])
+    fused = _newton_fit_windows(windows, weights, SmoothAbs(1), 100, 1e-12)
+    generic = _newton_fit_windows(windows, weights, GenericSmoothAbs(1), 100, 1e-12)
+    np.testing.assert_allclose(fused[0], generic[0], rtol=2e-12, atol=2e-12)
+    assert (fused[1], fused[3], fused[4]) == (generic[1], generic[3], generic[4])
+    assert fused[3] == 2
+    assert np.isnan(fused[2]) and np.isnan(generic[2])
+    assert np.isnan(fused[5]) and np.isnan(generic[5])
+
+
+@pytest.mark.parametrize("H", [1e-300, 1e-307])
+def test_tiny_H_lookup_matches_generic_path(H):
+    windows = np.array([[0.0, 1e-300, -1e-300, 3e-300, 2.0], [1.0, 2.0, 3.0, 4.0, 5.0]])
+    fused = _newton_fit_windows(windows, np.ones(5), SmoothAbs(H), 100, 1e-12)
+    generic = _newton_fit_windows(windows, np.ones(5), GenericSmoothAbs(H), 100, 1e-12)
+    assert fused[3] == generic[3] == 0
+    np.testing.assert_allclose(fused[0], generic[0], rtol=2e-12, atol=2e-12)
+
+
+@pytest.mark.parametrize("size", [65, 9001])
+def test_singleton_rows_match_batched_rows(size):
+    windows = np.random.default_rng(7).normal(size=(5, size))
+    weights = squared_triangle.weights(size)
+    batch = _newton_fit_windows(windows, weights, SmoothAbs(0.4), 100, 1e-12)
+    single = [
+        _newton_fit_windows(row[None], weights, SmoothAbs(0.4), 100, 1e-12) for row in windows
+    ]
+    assert np.array_equal(batch[0], [fit[0][0] for fit in single])
+    assert batch[5] == max(fit[5] for fit in single)
