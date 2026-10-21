@@ -2,16 +2,28 @@
 
 import numpy as np
 
+_SIGN = np.int64(-(2**63))
+
+
+def _middle(lo, hi):
+    """Bracket midpoint; IEEE-754 order when the bracket spans magnitudes."""
+    # Ordered float64 ranks bound wide-bracket searches to at most 64 halvings.
+    a, b = (np.where(v < 0, _SIGN - v, v) for v in (lo.view(np.int64), hi.view(np.int64)))
+    m = (a >> 1) + (b >> 1) + (a & b & 1)
+    ordered = np.where(m < 0, _SIGN - m, m).view(np.float64)
+    with np.errstate(over="ignore", invalid="ignore"):
+        wide = hi - lo > 2.0 * (1.0 + np.minimum(np.abs(lo), np.abs(hi)))
+    return np.where(wide, ordered, 0.5 * lo + 0.5 * hi)
+
 
 def _newton_fit_windows(windows, weights, contrast, max_iter, tol):
     """Return roots, max iterations/delta, unfinished count, fallbacks and score.
 
     Each row brackets a nonincreasing weighted score. Start at the weighted mean,
-    restarting at a sample median if its slope is zero. The rtsafe safeguard bisects
+    restarting at a weighted median if its slope is zero. The rtsafe safeguard bisects
     unless Newton stays inside the bracket and reduces the step to less than
-    half the step before last. Before rejecting an interior step, expand local
-    score probes to tighten a potentially outlier-wide bracket. Small steps
-    need a positional bracket.
+    half the step before last. Wide brackets bisect float64 ranks to bound the
+    number of halvings across extreme outliers. Small steps need a positional bracket.
     Flat zero intervals use the midpoint of their two boundaries, each located
     by bisection within the same cap.
     """
@@ -24,6 +36,11 @@ def _newton_fit_windows(windows, weights, contrast, max_iter, tol):
         with np.errstate(over="ignore", invalid="ignore"):
             residuals = windows[rows] - estimates[:, None]
             return np.sum(weights * contrast.psi(residuals), axis=1)
+
+    def slope_at(rows, estimates):
+        with np.errstate(over="ignore", invalid="ignore"):
+            residuals = windows[rows] - estimates[:, None]
+            return np.sum(weights * contrast.psi_prime(residuals), axis=1)
 
     lo, hi = windows.min(axis=1), windows.max(axis=1)
     with np.errstate(over="ignore", invalid="ignore"):
@@ -66,18 +83,15 @@ def _newton_fit_windows(windows, weights, contrast, max_iter, tol):
 
             moving = score != 0
             rows, score = rows[moving], score[moving]
-            with np.errstate(over="ignore", invalid="ignore"):
-                residuals = windows[rows] - x[rows, None]
-                slope = np.sum(weights * contrast.psi_prime(residuals), axis=1)
+            slope = slope_at(rows, x[rows])
             if iterations == 1 and np.any(slope == 0):
                 stalled = slope == 0
                 reset_rows = rows[stalled]
-                middle = windows.shape[1] // 2
-                x[reset_rows] = np.partition(windows[reset_rows], middle, axis=1)[:, middle]
+                order = np.argsort(windows[reset_rows], axis=1)
+                middle = np.argmax(np.cumsum(weights[order], axis=1) >= 0.5, axis=1)
+                x[reset_rows] = windows[reset_rows, order[np.arange(len(reset_rows)), middle]]
                 score[stalled] = score_at(reset_rows, x[reset_rows])
-                with np.errstate(over="ignore", invalid="ignore"):
-                    residuals = windows[reset_rows] - x[reset_rows, None]
-                    slope[stalled] = np.sum(weights * contrast.psi_prime(residuals), axis=1)
+                slope[stalled] = slope_at(reset_rows, x[reset_rows])
             lo[rows] = np.where(score > 0, x[rows], lo[rows])
             hi[rows] = np.where(score < 0, x[rows], hi[rows])
             step = np.full(len(rows), np.inf)
@@ -90,31 +104,8 @@ def _newton_fit_windows(windows, weights, contrast, max_iter, tol):
                 | (candidate > hi[rows])
                 | (np.abs(step) >= 0.5 * older_step[rows])
             )
-            searching = bisect & np.isfinite(step) & (candidate > lo[rows]) & (candidate < hi[rows])
-            probe_indices = np.flatnonzero(searching)
-            probe_rows, radius = rows[probe_indices], np.abs(step[probe_indices])
-            direction = np.sign(score[searching])
-            for _ in range(max_iter):
-                if not probe_rows.size:
-                    break
-                with np.errstate(over="ignore", invalid="ignore"):
-                    probe = np.clip(
-                        x[probe_rows] + direction * radius, lo[probe_rows], hi[probe_rows]
-                    )
-                probe_score = score_at(probe_rows, probe)
-                lo[probe_rows] = np.where(probe_score > 0, probe, lo[probe_rows])
-                hi[probe_rows] = np.where(probe_score < 0, probe, hi[probe_rows])
-                zeros = probe_score == 0
-                candidate[probe_indices[zeros]] = probe[zeros]
-                bisect[probe_indices[zeros]] = False
-                expand = np.isfinite(probe_score) & (direction * probe_score > 0)
-                expand &= np.where(direction > 0, probe < hi[probe_rows], probe > lo[probe_rows])
-                probe_indices = probe_indices[expand]
-                probe_rows, direction = probe_rows[expand], direction[expand]
-                with np.errstate(over="ignore"):
-                    radius = 2 * radius[expand]
             midpoint = 0.5 * lo[rows] + 0.5 * hi[rows]
-            candidate = np.where(bisect, midpoint, candidate)
+            candidate = np.where(bisect, _middle(lo[rows], hi[rows]), candidate)
             with np.errstate(over="ignore", invalid="ignore"):
                 narrow = hi[rows] - lo[rows] <= tol * (
                     1.0 + np.maximum(np.abs(lo[rows]), np.abs(hi[rows]))
@@ -135,20 +126,18 @@ def _newton_fit_windows(windows, weights, contrast, max_iter, tol):
                 bracketed = finite & (left_score >= 0) & (right_score <= 0)
                 finished[small] = bracketed & ~zero_hit
                 lo[probe_rows] = np.where(
-                    left_score > 0, np.maximum(lo[probe_rows], left), lo[probe_rows]
-                )
-                lo[probe_rows] = np.where(
-                    right_score > 0, np.maximum(lo[probe_rows], right), lo[probe_rows]
-                )
-                hi[probe_rows] = np.where(
-                    left_score < 0, np.minimum(hi[probe_rows], left), hi[probe_rows]
+                    right_score > 0,
+                    np.maximum(lo[probe_rows], right),
+                    np.where(left_score > 0, np.maximum(lo[probe_rows], left), lo[probe_rows]),
                 )
                 hi[probe_rows] = np.where(
-                    right_score < 0, np.minimum(hi[probe_rows], right), hi[probe_rows]
+                    left_score < 0,
+                    np.minimum(hi[probe_rows], left),
+                    np.where(right_score < 0, np.minimum(hi[probe_rows], right), hi[probe_rows]),
                 )
                 next_x = np.where(left_score == 0, left, right)
                 retry = ~bracketed & ~zero_hit
-                next_x = np.where(retry, 0.5 * lo[probe_rows] + 0.5 * hi[probe_rows], next_x)
+                next_x = np.where(retry, _middle(lo[probe_rows], hi[probe_rows]), next_x)
                 candidate[small] = np.where(finished[small], candidate[small], next_x)
                 fallbacks += int(np.count_nonzero(retry))
             with np.errstate(over="ignore", invalid="ignore"):
@@ -160,8 +149,8 @@ def _newton_fit_windows(windows, weights, contrast, max_iter, tol):
 
         rows = np.flatnonzero(flat & ~done)
         if rows.size:
-            left = 0.5 * lo[rows] + 0.5 * zero_left[rows]
-            right = 0.5 * zero_right[rows] + 0.5 * hi[rows]
+            left = _middle(lo[rows], zero_left[rows])
+            right = _middle(zero_right[rows], hi[rows])
             left_score, right_score = score_at(rows, left), score_at(rows, right)
             finite = np.isfinite(left_score) & np.isfinite(right_score)
             delta[rows[~finite]] = np.nan
@@ -181,9 +170,6 @@ def _newton_fit_windows(windows, weights, contrast, max_iter, tol):
                 1.0 + np.maximum(np.abs(zero_left[rows]), np.abs(zero_right[rows]))
             )
             fallbacks += 2 * len(rows)
-
-        if np.all(done):
-            break
 
     score = score_at(np.arange(len(x)), x)
     finite = np.isfinite(x) & np.isfinite(score)

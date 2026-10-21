@@ -65,6 +65,20 @@ the same independent research-score bisection. Extreme outliers at 1e15,
 initial range. Both uniform windows and the nearly half-weight spike kernel
 are covered.
 
+The flat-interval fixture also saves both zero-set boundaries. Its positional
+tolerance is `tol * (1 + max(abs(boundaries)))`, since the solver resolves each
+edge at that scale before taking their midpoint. Zero-weight samples do not
+enter this scale or the bracket.
+
+Additional research-score bisections cover a seven-sample zero-slope stall,
+two low-weight outlier clusters, and positive and negative outliers from
+1e10 through `finfo.max` at H = 0.003 and 0.01. The sweep uses 1,200 arithmetic
+bisections to resolve even the widest brackets. A length-2048 noisy square
+wave with three netCDF fill values uses 256 bisections per stage over the
+full schedule. The Huber integer-data example saves its input and first
+component from independent bisection of the clipped linear score, with a
+single 1e30 outlier.
+
 ```sh
 uv run python tests/data/generate_newton_reference.py /path/to/imf
 ```

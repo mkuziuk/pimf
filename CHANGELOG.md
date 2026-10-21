@@ -3,59 +3,45 @@
 ## Unreleased
 
 - Add `IMF(on_unconverged="warn" | "raise" | "ignore")`, defaulting to one
-  `RuntimeWarning` per stage that hits `max_iter` with unconverged windows.
-  For GD, windows are still moving above the final chunk threshold,
-  `tol * (1 + max(abs(x)))`. The count ignores NaNs in the maximum without
-  changing the research stop rule. Non-finite updates count as unconverged.
-  Messages name the stage, window size and total unconverged window count.
-- Batch users can silence warnings with `on_unconverged="ignore"` and inspect
-  `StageInfo.converged` / `unconverged_windows`, or use a Python `warnings`
-  filter. Long schedules and repeated runs can emit many warnings.
-- Add opt-in `solver="newton"` for robust fits where GD takes too long to
-  reach the root. Pure-NumPy safeguarded Newton uses bisection fallbacks and
-  independent window stopping. Small steps require a positional root bracket;
-  flat zero-score intervals in either lookup mode return the midpoint of
-  boundaries located to tolerance at their edge scale. Non-finite scores or
-  estimates remain unconverged. Saturated initial means restart at a sample
-  median, and local score probes tighten outlier-wide brackets before fallback
-  bisections. Constant windows finish without probes, including extreme finite
-  values. Built-in contrasts give bit-identical values and diagnostics across
-  worker counts, including singleton chunks.
-- Newton defaults to `max_iter=100` and `tol=1e-12`. Default GD retains 60
-  iterations, `tol=1e-6` and bit-identical research numerics. Both target the
-  same score equation. Differences beyond stopping roundoff occur where GD
-  has not reached the root, even if its small-update test reports convergence,
-  or when it chooses another point on a flat zero interval. GD convergence
-  does not bound distance to the root. When `H << tol * abs(x)`, Newton can
-  meet positional tolerance with a large score because the score is steep.
+  `RuntimeWarning` per capped stage with unfinished windows. Messages include
+  the stage, window size, unfinished count and a remedy. The policy also
+  applies with multiple workers.
+- Add opt-in `solver="newton"` for robust local score roots, with independent
+  window stopping and safeguarded bisection. Stalled weighted means restart
+  at a weighted median. Outlier-wide brackets bisect float64 ranks, bounding
+  these searches to at most 64 ordered halvings. Small steps require a
+  positional root bracket. Flat zero-score intervals return the midpoint of
+  boundaries resolved to tolerance at their edge scale. Non-finite scores or
+  estimates remain unconverged. Built-in contrasts give bit-identical Newton
+  values and diagnostics across worker counts.
 - Add vectorized `Contrast.psi_prime(r)` for custom Newton contrasts, with
   implementations for `Quadratic` and `SmoothAbs`. Slopes use raw residual
-  units, including `1/H`; lookup slopes follow the piecewise-linear score,
-  while direct evaluation uses the Gaussian slope and research `erf_approx`
-  score. `psi_prime` no longer overflows for very small H. Closed-form `solve()`
-  hooks still take precedence over either solver.
-- Document every `StageInfo` field: `stage`, `window_size`, `bandwidth`,
-  `iterations`, `final_max_delta`, `converged`, and new `unconverged_windows`,
-  `bisection_fallbacks` and `max_abs_score`. Both iterative solvers report the
-  largest absolute weighted score. GD uses the last evaluated iterate, before
-  the final update, without an extra score pass; Newton uses the returned
-  estimates. GD updates are unchanged. Direct fits keep NaN scores and deltas.
-  Parallel maxima propagate NaN; counts sum across workers. Identical GD runs
-  retain equal stage diagnostics.
-- Add research-score fixtures for adversarial plateaus and tiny H, numerical
-  regressions and a reproducible solver benchmark. Each Newton iteration
-  needs score and slope evaluations plus any probes or bisections. On the
-  issue #3 bursty signals at L=1024/2048/4096, measured speedups over default
-  GD were 4.40x/5.10x/5.01x; see `benchmarks/README.md` for costs and protocol.
+  units, including `1/H`; lookup slopes follow the piecewise-linear score.
+  Direct evaluation retains the research `erf_approx` score and uses the
+  Gaussian slope. Closed-form `solve()` hooks still take precedence.
+- Add `StageInfo.unconverged_windows`, `bisection_fallbacks` and `max_abs_score`.
+  GD counts updates above the final chunk threshold, `tol * (1 + max(abs(x)))`,
+  including non-finite updates. Its score diagnostic uses the last evaluated
+  iterate, before the final update, without another score pass. Newton reports
+  the score at its returned estimates. Parallel maxima propagate NaN and
+  counts sum across workers. Direct fits report NaN scores and deltas.
+- Add a reproducible solver benchmark; see `benchmarks/README.md` for measured
+  times, evaluation costs and the protocol.
 
 ### Upgrading from 0.4.0
 
-`IMF.on_unconverged` is a new configuration attribute. Default GD now emits
-`RuntimeWarning` on capped stages, so suites using `-W error` or
-`filterwarnings=error` may fail. Set `on_unconverged="ignore"` or add a warning
-filter. `StageInfo` gained the defaulted `unconverged_windows` field: existing
-positional construction still works, but `dataclasses.astuple()` returns one
-more item.
+The signature defaults `IMF(max_iter=None, tol=None)` now resolve per solver:
+GD retains `60` and `1e-6`, with bit-identical research numerics; Newton uses
+`100` and `1e-12`. Explicit values override these defaults. `IMF.solver` and
+`IMF.on_unconverged` are new configuration attributes.
+
+Default GD now emits `RuntimeWarning` on capped stages, so suites using
+`-W error` or `filterwarnings=error` may fail. Set `on_unconverged="ignore"`
+or add a warning filter. `StageInfo` gained three defaulted fields: existing
+positional construction still works, but `dataclasses.astuple()` now returns
+nine items instead of six. GD's small-update convergence flag does not bound
+distance to the score root. Newton's positional tolerance does not remove
+lookup table approximation error.
 
 ## 0.4.0
 

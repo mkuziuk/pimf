@@ -15,17 +15,21 @@ def reference():
         return dict(data)
 
 
-def bisect_roots(windows, weights, contrast):
+def bisect_roots(windows, weights, contrast, iterations=100):
     """Independent score bisection; return the midpoint of the zero set."""
     positive = weights > 0
-    windows, weights = windows[:, positive], weights[positive]
+    windows = np.ascontiguousarray(windows[:, positive], dtype=float)
+    weights = weights[positive]
     weights = weights / weights.sum()
     edges = []
     for right_edge in (False, True):
         lo, hi = windows.min(axis=1), windows.max(axis=1)
-        for _ in range(100):
+        for _ in range(iterations):
             mid = 0.5 * lo + 0.5 * hi
-            score = np.sum(weights * contrast.psi(windows - mid[:, None]), axis=1)
+            if np.all((mid == lo) | (mid == hi)):
+                break
+            with np.errstate(over="ignore", invalid="ignore"):
+                score = np.sum(weights * contrast.psi(windows - mid[:, None]), axis=1)
             positive_score = score >= 0 if right_edge else score > 0
             lo = np.where(positive_score, mid, lo)
             hi = np.where(positive_score, hi, mid)
@@ -145,30 +149,34 @@ def test_agreement_with_tightly_converged_gd(reference, H, size, lookup):
 def test_flat_zero_interval_uses_its_midpoint(reference):
     windows, weights = reference["flat_windows"], reference["flat_weights"]
     contrast = SmoothAbs(1)
+    tol = 1e-12
     roots, _, _, unfinished, fallbacks, score = _newton_fit_windows(
-        windows, weights, contrast, 100, 1e-12
+        windows, weights, contrast, 100, tol
     )
     assert unfinished == 0
     assert fallbacks > 0
     assert score == pytest.approx(0, rel=0, abs=1e-15)
     assert abs(roots[0] - (windows @ weights)[0]) > 1
-    np.testing.assert_allclose(roots, reference["flat_root"], rtol=1e-12, atol=1e-11)
+    tolerance = tol * (1 + np.max(np.abs(reference["flat_boundaries"])))
+    np.testing.assert_allclose(roots, reference["flat_root"], rtol=0, atol=tolerance)
     np.testing.assert_allclose(
-        roots, bisect_roots(windows, weights, contrast), rtol=1e-12, atol=1e-11
+        roots, bisect_roots(windows, weights, contrast), rtol=0, atol=tolerance
     )
     permuted = _newton_fit_windows(windows[:, ::-1], weights[::-1], contrast, 100, 1e-12)[0]
-    np.testing.assert_allclose(permuted, roots, rtol=1e-12, atol=1e-11)
+    np.testing.assert_allclose(permuted, roots, rtol=0, atol=tolerance)
 
 
 def test_zero_weight_samples_do_not_change_bracket_or_root(reference):
     windows = np.c_[[-1e100], reference["flat_windows"], [1e100]]
     weights = np.r_[0.0, reference["flat_weights"], 0.0]
+    tol = 1e-12
     root, iterations, _, unfinished, _, _ = _newton_fit_windows(
-        windows, weights, SmoothAbs(1), 100, 1e-12
+        windows, weights, SmoothAbs(1), 100, tol
     )
     assert unfinished == 0
     assert iterations < 100
-    np.testing.assert_allclose(root, reference["flat_root"], rtol=1e-12, atol=1e-11)
+    tolerance = tol * (1 + np.max(np.abs(reference["flat_boundaries"])))
+    np.testing.assert_allclose(root, reference["flat_root"], rtol=0, atol=tolerance)
 
 
 def test_issue_3_spike(reference):
@@ -270,7 +278,7 @@ def test_capped_newton_policy_and_diagnostics(workers, policy):
     if policy == "raise":
         with pytest.raises(
             RuntimeError,
-            match=r"Stage 1 \(window size 7\): 5 windows did not converge after 1 iterations",
+            match=r"Stage 1 \(window size 7\): 5 windows did not converge after 1 iteration\.",
         ):
             method.decompose(y, h1=2 * np.sqrt(2) / len(y), k_max=1)
         return
@@ -282,7 +290,8 @@ def test_capped_newton_policy_and_diagnostics(workers, policy):
         assert caught[0].category is RuntimeWarning
         assert caught[0].filename == __file__
         assert str(caught[0].message) == (
-            "Stage 1 (window size 7): 5 windows did not converge after 1 iterations"
+            "Stage 1 (window size 7): 5 windows did not converge after 1 iteration. "
+            'Increase max_iter or set on_unconverged="ignore".'
         )
     stage = result.stages[0]
     assert not stage.converged
@@ -553,7 +562,7 @@ def test_extreme_bracket_range_and_probe_arithmetic_are_quiet(lookup):
 
 
 @pytest.mark.parametrize("lookup", [False, True])
-def test_outlier_restart_and_bracket_probes_preserve_worker_parity(lookup):
+def test_outlier_restart_and_midpoints_preserve_worker_parity(lookup):
     y = np.sin(2 * np.pi * np.arange(129) / 129)
     y[32] = 3.4e38
     config = dict(contrast=SmoothAbs(0.2, lookup=lookup), solver="newton", on_unconverged="raise")
@@ -562,3 +571,78 @@ def test_outlier_restart_and_bracket_probes_preserve_worker_parity(lookup):
     assert np.array_equal(parallel.imfs, serial.imfs)
     assert np.array_equal(parallel.residual, serial.residual)
     assert parallel.stages == serial.stages
+
+
+@pytest.mark.parametrize("lookup", [False, True])
+def test_weighted_median_restart_avoids_low_weight_outlier_cluster(reference, lookup):
+    contrast = SmoothAbs(0.2, lookup=lookup)
+    for y, expected in zip(
+        reference["cluster_windows"], reference[f"cluster_roots_{lookup}"], strict=True
+    ):
+        result = IMF(contrast, solver="newton", on_unconverged="raise").decompose(
+            y, window_sizes=[5]
+        )
+        assert result.stages[0].converged and result.stages[0].iterations < 10
+        np.testing.assert_allclose(result.imfs[0, 2], expected, rtol=0, atol=2e-12)
+
+
+@pytest.mark.parametrize("lookup", [False, True])
+def test_zero_slope_outlier_bracket_closes(reference, lookup):
+    windows, weights = reference["stalled_window"], reference["stalled_weights"]
+    contrast = SmoothAbs(0.01, lookup=lookup)
+    roots, iterations, _, unfinished, _, _ = _newton_fit_windows(
+        windows, weights, contrast, 100, 1e-12
+    )
+    assert unfinished == 0 and iterations < 100
+    np.testing.assert_allclose(roots, reference[f"stalled_root_{lookup}"], rtol=2e-12, atol=2e-12)
+    np.testing.assert_allclose(
+        roots, bisect_roots(windows, weights, contrast, iterations=256), rtol=2e-12, atol=2e-12
+    )
+
+
+def test_square_wave_fill_values_do_not_spread_to_non_fill_samples(reference):
+    y = reference["fill_y"]
+    result = IMF(SmoothAbs(0.02), solver="newton", on_unconverged="raise").decompose(
+        y, k_max=None, h_min=1.5 / len(y)
+    )
+    assert all(stage.converged and stage.iterations < 100 for stage in result.stages)
+    non_fill = np.abs(y) < 1e30
+    assert np.max(np.abs(result.imfs[:, non_fill])) < 2
+    np.testing.assert_allclose(
+        result.imfs[:, non_fill], reference["fill_imfs"][:, non_fill], rtol=0, atol=2e-10
+    )
+
+
+def test_huber_integer_example_with_gross_outlier(reference):
+    class Huber(Contrast):
+        def psi(self, r):
+            return np.clip(r, -0.3, 0.3)
+
+        def psi_prime(self, r):
+            return (np.abs(r) < 0.3).astype(float)
+
+    result = IMF(Huber(), solver="newton", on_unconverged="raise").decompose(reference["huber_y"])
+    assert all(stage.converged and stage.iterations < 100 for stage in result.stages)
+    np.testing.assert_allclose(
+        result.imfs[0], reference["huber_first_component"], rtol=0, atol=1e-11
+    )
+
+
+@pytest.mark.parametrize("size", [7, 15, 33])
+@pytest.mark.parametrize("kernel", ["uniform", "squared_triangle"])
+@pytest.mark.parametrize("H", [0.003, 0.01])
+@pytest.mark.parametrize("lookup", [False, True])
+def test_outlier_magnitude_sweep_matches_independent_bisection(reference, size, kernel, H, lookup):
+    windows = reference[f"sweep_{size}_windows"]
+    weights = reference[f"sweep_{size}_{kernel}_weights"]
+    contrast = SmoothAbs(H, lookup=lookup)
+    roots, iterations, _, unfinished, _, _ = _newton_fit_windows(
+        windows, weights, contrast, 100, 1e-12
+    )
+    assert unfinished == 0 and iterations < 100
+    np.testing.assert_allclose(
+        roots, reference[f"sweep_{size}_{kernel}_{H}_{lookup}"], rtol=2e-12, atol=2e-12
+    )
+    np.testing.assert_allclose(
+        roots, bisect_roots(windows, weights, contrast, iterations=1200), rtol=2e-12, atol=2e-12
+    )

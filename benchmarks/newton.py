@@ -1,4 +1,4 @@
-"""Compare safeguarded Newton with default GD on the issue #3 bursty signal.
+"""Compare safeguarded Newton with default GD on a bursty signal.
 
 Run: uv run python benchmarks/newton.py --output /tmp/newton_results.json
 """
