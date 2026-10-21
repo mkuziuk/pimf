@@ -5,9 +5,10 @@ import numpy as np
 from .contrasts import _SCORE, _SCORE_DELTA, SmoothAbs
 
 _SIGN = np.int64(-(2**63))
-# One padding entry on each side gives residuals beyond +-8H a zero slope.
-_PADDED_SCORE = np.r_[_SCORE[0], _SCORE, _SCORE[-1]]
-_PADDED_DELTA = np.r_[0.0, _SCORE_DELTA[:-1], 0.0, 0.0]
+# Grid tables padded with one zero-slope entry above the grid and, at index -1,
+# one below it.
+_PADDED_SCORE = np.r_[_SCORE, _SCORE[-1], _SCORE[0]]
+_PADDED_DELTA = np.r_[_SCORE_DELTA, 0.0, 0.0]
 for _table in (_PADDED_SCORE, _PADDED_DELTA):
     _table.setflags(write=False)
 # Samples per evaluation block, so that its temporaries stay in cache.
@@ -50,10 +51,12 @@ def _newton_fit_windows(windows, weights, contrast, max_iter, tol):
     block = max(1, _BLOCK_SAMPLES // windows.shape[1])
     lookup = type(contrast) is SmoothAbs and contrast.lookup
     if lookup:
-        with np.errstate(over="ignore"):
-            scale = 256.0 / contrast.H
-        lookup = bool(np.isfinite(scale))
+        # Dividing by an exact H / 256 gives SmoothAbs's 256 * (r / H) without rounding.
+        divisor = contrast.H / 256
+        lookup = divisor * 256 == contrast.H
     if lookup:
+        with np.errstate(over="ignore"):
+            slope_table = (256.0 * _PADDED_DELTA) / contrast.H
         # Probes evaluate up to two estimates per row.
         shape = (min(block, 2 * len(windows)), windows.shape[1])
         position, floor, index = np.empty(shape), np.empty(shape), np.empty(shape, dtype=np.intp)
@@ -74,7 +77,7 @@ def _newton_fit_windows(windows, weights, contrast, max_iter, tol):
                     psi_prime = contrast.psi_prime(sample - estimate)
                     slopes[part] = np.sum(weights * psi_prime, axis=1)
                 continue
-            # Score and slope share one table position per sample.
+            # SmoothAbs.psi and psi_prime arithmetic, sharing one table position.
             n = len(estimate)
             p, f, i, w = position[:n], floor[:n], index[:n], tiled_weights[:n]
             if rows is None:
@@ -83,23 +86,25 @@ def _newton_fit_windows(windows, weights, contrast, max_iter, tol):
                 # Rows are valid indices; "clip" mode gathers without a buffer.
                 np.take(windows, rows[part], axis=0, out=p, mode="clip")
                 p -= estimate
-            p *= scale
-            p += 2049.0
-            np.clip(p, 0.0, 4098.0, out=p)
+            p /= divisor
+            # As 8H is exact, |r| > 8H exactly when r / H rounds outside [-8, 8];
+            # those positions land in the zero-slope padding cells.
+            np.clip(p, -2049.0, 2049.0, out=p)
+            p += 2048.0
             np.floor(p, out=f)
             p -= f
             if nan_positions:
                 # NaNs need safe indices, but still propagate through the fractions.
-                np.fmin(f, 4098.0, out=f)
+                np.fmin(f, 4097.0, out=f)
             np.copyto(i, f, casting="unsafe")
-            delta = _PADDED_DELTA[i]
-            p *= delta
+            p *= _PADDED_DELTA[i]
             p += _PADDED_SCORE[i]
             p *= w
             scores[part] = p.sum(axis=1)
             if slope:
-                delta *= w
-                slopes[part] = delta.sum(axis=1) * scale
+                g = slope_table[i]
+                g *= w
+                slopes[part] = g.sum(axis=1)
         return scores, slopes
 
     def weighted_median(rows):

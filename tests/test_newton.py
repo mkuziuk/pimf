@@ -3,6 +3,7 @@ from pathlib import Path
 
 import numpy as np
 import pytest
+from numpy.lib.stride_tricks import sliding_window_view
 
 from pimf import IMF, Contrast, Quadratic, SmoothAbs, squared_triangle, triangle, uniform
 from pimf._newton import _newton_fit_windows
@@ -687,23 +688,21 @@ class GenericSmoothAbs(SmoothAbs):
     """SmoothAbs evaluated through the generic psi and psi_prime path."""
 
 
-def weighted_scores(windows, weights, contrast, roots):
-    positive = weights > 0
-    residuals = windows[:, positive] - roots[:, None]
-    return np.sum(weights[positive] / weights[positive].sum() * contrast.psi(residuals), axis=1)
+def assert_same_fit(fused, generic):
+    np.testing.assert_array_equal(fused[0], generic[0])
+    np.testing.assert_array_equal(fused[1:], generic[1:])
 
 
 @pytest.mark.parametrize("H", [0.01, 1.0, 10.0])
 @pytest.mark.parametrize("size", [3, 65, 1025])
-def test_fused_lookup_matches_generic_score_path(reference, H, size):
+def test_fused_lookup_is_bit_identical_to_generic_path(reference, H, size):
     prefix = f"h{[0.01, 1.0, 10.0].index(H)}_w{size}_"
     windows, weights = reference[prefix + "windows"], reference[prefix + "weights"]
-    fused = _newton_fit_windows(windows, weights, SmoothAbs(H), 100, 1e-12)
-    generic = _newton_fit_windows(windows, weights, GenericSmoothAbs(H), 100, 1e-12)
-    assert fused[3] == generic[3] == 0
-    np.testing.assert_allclose(fused[0], generic[0], rtol=2e-12, atol=2e-12)
-    scores = weighted_scores(windows, weights, SmoothAbs(H), fused[0])
-    assert fused[5] == pytest.approx(np.max(np.abs(scores)), rel=0, abs=1e-14)
+    for max_iter in (1, 3, 100):
+        assert_same_fit(
+            _newton_fit_windows(windows, weights, SmoothAbs(H), max_iter, 1e-12),
+            _newton_fit_windows(windows, weights, GenericSmoothAbs(H), max_iter, 1e-12),
+        )
 
 
 def test_fused_lookup_matches_generic_path_on_nonfinite_and_extreme_samples():
@@ -720,21 +719,43 @@ def test_fused_lookup_matches_generic_path_on_nonfinite_and_extreme_samples():
     )
     weights = np.array([1.0, 2.0, 3.0, 2.0, 1.0])
     fused = _newton_fit_windows(windows, weights, SmoothAbs(1), 100, 1e-12)
-    generic = _newton_fit_windows(windows, weights, GenericSmoothAbs(1), 100, 1e-12)
-    np.testing.assert_allclose(fused[0], generic[0], rtol=2e-12, atol=2e-12)
-    assert (fused[1], fused[3], fused[4]) == (generic[1], generic[3], generic[4])
+    assert_same_fit(fused, _newton_fit_windows(windows, weights, GenericSmoothAbs(1), 100, 1e-12))
     assert fused[3] == 2
-    assert np.isnan(fused[2]) and np.isnan(generic[2])
-    assert np.isnan(fused[5]) and np.isnan(generic[5])
 
 
-@pytest.mark.parametrize("H", [1e-300, 1e-307])
-def test_tiny_H_lookup_matches_generic_path(H):
-    windows = np.array([[0.0, 1e-300, -1e-300, 3e-300, 2.0], [1.0, 2.0, 3.0, 4.0, 5.0]])
-    fused = _newton_fit_windows(windows, np.ones(5), SmoothAbs(H), 100, 1e-12)
-    generic = _newton_fit_windows(windows, np.ones(5), GenericSmoothAbs(H), 100, 1e-12)
-    assert fused[3] == generic[3] == 0
-    np.testing.assert_allclose(fused[0], generic[0], rtol=2e-12, atol=2e-12)
+@pytest.mark.parametrize("H", [1e-300, 1e-307, 1e4, 1e300])
+def test_extreme_H_lookup_matches_generic_path(H):
+    windows = np.array(
+        [[0.0, 1e-300, -1e-300, 3e-300, 2.0], [1.0, 2.0, 3.0, 4.0, 5.0], [-1, 0, 1, 0, 0]]
+    )
+    for max_iter in (3, 100):
+        assert_same_fit(
+            _newton_fit_windows(windows, np.ones(5), SmoothAbs(H), max_iter, 1e-12),
+            _newton_fit_windows(windows, np.ones(5), GenericSmoothAbs(H), max_iter, 1e-12),
+        )
+
+
+def test_large_H_plateau_root_matches_generic_path():
+    windows, weights = np.array([[-1.0, 0.0, 1.0]]), np.ones(3)
+    for max_iter in (3, 100):
+        fused = _newton_fit_windows(windows, weights, SmoothAbs(1e4), max_iter, 1e-12)
+        generic = _newton_fit_windows(windows, weights, GenericSmoothAbs(1e4), max_iter, 1e-12)
+        assert_same_fit(fused, generic)
+        assert fused[3] == 0
+
+
+def test_residuals_just_beyond_8H_have_zero_slope():
+    y = [0.0, 0.0, np.nextafter(36.0, np.inf)]
+    for contrast in (SmoothAbs(1.5), GenericSmoothAbs(1.5)):
+        result = IMF(
+            contrast, kernel=uniform, solver="newton", max_iter=4, on_unconverged="raise"
+        ).decompose(y, window_sizes=[3])
+        assert result.stages[0].converged and result.stages[0].bisection_fallbacks == 0
+    windows = sliding_window_view(np.pad(y, 1, mode="wrap"), 3)
+    assert_same_fit(
+        _newton_fit_windows(windows, np.ones(3), SmoothAbs(1.5), 4, 1e-12),
+        _newton_fit_windows(windows, np.ones(3), GenericSmoothAbs(1.5), 4, 1e-12),
+    )
 
 
 @pytest.mark.parametrize("size", [65, 9001])
