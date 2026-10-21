@@ -60,7 +60,10 @@ signal at L = 2048. Tests additionally bisect the library's score to distinguish
 solver error from interpolation roundoff, and compare with tightly converged GD.
 Adversarial cases cover grid-aligned and direct-score flat intervals, mirrored
 inputs, H=1e-14, and flat intervals at scales 1e2, 1e4 and 1e8. Their roots use
-the same independent research-score bisection.
+the same independent research-score bisection. Extreme outliers at 1e15,
+1e30, 9.97e36 and 3.4e38 use 256 bisections to resolve the root despite the
+initial range. Both uniform windows and the nearly half-weight spike kernel
+are covered.
 
 ```sh
 uv run python tests/data/generate_newton_reference.py /path/to/imf

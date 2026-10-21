@@ -3,7 +3,6 @@ from pathlib import Path
 
 import numpy as np
 import pytest
-from numpy.lib.stride_tricks import sliding_window_view
 
 from pimf import IMF, Contrast, Quadratic, SmoothAbs, squared_triangle, triangle, uniform
 from pimf._newton import _newton_fit_windows
@@ -133,7 +132,9 @@ def test_agreement_with_tightly_converged_gd(reference, H, size, lookup):
     prefix = f"h{[0.01, 1.0, 10.0].index(H)}_w{size}_"
     windows, weights = reference[prefix + "windows"][:1], reference[prefix + "weights"]
     contrast = SmoothAbs(H, lookup=lookup)
-    gd, _, delta, unconverged_windows = _gd_fit_windows(windows, weights, contrast, 20000, 1e-12)
+    gd, _, delta, unconverged_windows, _, _ = _gd_fit_windows(
+        windows, weights, contrast, 20000, 1e-12
+    )
     assert delta <= 1e-12 * (1 + np.max(np.abs(gd)))
     assert unconverged_windows == 0
     newton, _, _, unfinished, _, _ = _newton_fit_windows(windows, weights, contrast, 100, 1e-12)
@@ -415,20 +416,37 @@ def test_nonfinite_newton_estimate_is_not_done():
 
 
 @pytest.mark.parametrize("workers", [1, 3])
-def test_identical_gd_runs_have_equal_stages_and_report_final_score(workers):
+def test_identical_gd_runs_have_equal_stages(workers):
     y = np.random.default_rng(6).normal(size=129)
     method = IMF(SmoothAbs(0.4), workers=workers, on_unconverged="ignore")
     a = method.decompose(y, window_sizes=[65])
     b = method.decompose(y, window_sizes=[65])
     assert a.stages == b.stages
-    windows = sliding_window_view(np.pad(y, 32, mode="wrap"), 65)
+    assert np.isfinite(a.stages[0].max_abs_score)
+
+
+@pytest.mark.parametrize("max_iter", [1, 5, 60])
+def test_gd_score_uses_last_evaluation_without_extra_pass(max_iter):
+    class RecordingScore(SmoothAbs):
+        def __init__(self):
+            super().__init__(0.4)
+            self.scores = []
+
+        def psi(self, r):
+            score = super().psi(r)
+            self.scores.append(score)
+            return score
+
+    contrast = RecordingScore()
+    y = np.random.default_rng(6).normal(size=129)
+    result = IMF(contrast, max_iter=max_iter, on_unconverged="ignore").decompose(
+        y, window_sizes=[65]
+    )
+    stage = result.stages[0]
+    assert len(contrast.scores) == stage.iterations
     weights = squared_triangle.weights(65)
-    scores = np.sum(
-        (weights / weights.sum()) * method.contrast.psi(windows - a.imfs[0, :, None]), axis=1
-    )
-    np.testing.assert_allclose(
-        a.stages[0].max_abs_score, np.max(np.abs(scores)), rtol=0, atol=1e-15
-    )
+    scores = np.sum((weights / weights.sum()) * contrast.scores[-1], axis=1)
+    np.testing.assert_allclose(stage.max_abs_score, np.max(np.abs(scores)), rtol=0, atol=1e-15)
 
 
 @pytest.mark.parametrize("lookup", [False, True])
@@ -466,3 +484,81 @@ def test_derivative_probe_preserves_attribute_errors():
 
     with pytest.raises(AttributeError, match="missing_attribute"):
         IMF(BrokenSlope(), solver="newton")
+
+
+@pytest.mark.parametrize("lookup", [False, True])
+def test_extreme_outliers_match_research_score_roots(reference, lookup):
+    for prefix, weights in (("extreme", np.ones(7)), ("extreme_spike", reference["spike_weights"])):
+        windows = reference["extreme_windows" if prefix == "extreme" else "extreme_spikes"]
+        roots, iterations, _, unfinished, _, _ = _newton_fit_windows(
+            windows, weights, SmoothAbs(0.2, lookup=lookup), 100, 1e-12
+        )
+        assert unfinished == 0
+        assert iterations < 100
+        np.testing.assert_allclose(
+            roots, reference[f"{prefix}_roots_{lookup}"], rtol=2e-12, atol=2e-12
+        )
+
+
+@pytest.mark.parametrize("big", [1e30, 9.97e36, 3.4e38])
+@pytest.mark.parametrize("kernel", [uniform, squared_triangle])
+@pytest.mark.parametrize("lookup", [False, True])
+def test_extreme_outlier_decompositions_finish(big, kernel, lookup):
+    method = IMF(
+        SmoothAbs(0.2, lookup=lookup), kernel=kernel, solver="newton", on_unconverged="raise"
+    )
+    y = np.random.default_rng(42).normal(0, 0.1, 512)
+    y[128] = big
+    result = method.decompose(y, window_sizes=[7])
+    assert all(stage.converged and stage.iterations < 100 for stage in result.stages)
+    for schedule in ({}, {"k_max": None, "h_min": 1.5 / 512}):
+        y = np.sin(2 * np.pi * np.arange(512) / 512)
+        y[128] = big
+        result = method.decompose(y, **schedule)
+        assert all(stage.converged and stage.iterations < 100 for stage in result.stages)
+        assert np.all(np.isfinite(result.imfs))
+        assert np.all(np.isfinite(result.residual))
+
+
+@pytest.mark.parametrize("sign", [-1, 1])
+@pytest.mark.parametrize("size", [1, 7])
+def test_degenerate_extreme_windows_finish_without_probes(sign, size):
+    class ConstantScore(SmoothAbs):
+        def psi(self, r):
+            assert np.all(r == 0), "constant windows must not probe outside the bracket"
+            return super().psi(r)
+
+    y = np.full(size, sign * np.finfo(float).max)
+    result = IMF(ConstantScore(1), solver="newton", on_unconverged="raise").decompose(
+        y, window_sizes=[size]
+    )
+    np.testing.assert_allclose(result.imfs[0], y, rtol=0, atol=0)
+    np.testing.assert_allclose(result.residual, 0.0, rtol=0, atol=0)
+    stage = result.stages[0]
+    assert stage.converged and stage.unconverged_windows == 0
+    assert stage.iterations == stage.bisection_fallbacks == 0
+    assert stage.final_max_delta == stage.max_abs_score == 0
+
+
+@pytest.mark.parametrize("lookup", [False, True])
+def test_extreme_bracket_range_and_probe_arithmetic_are_quiet(lookup):
+    limit = np.finfo(float).max
+    windows = np.array([[-limit, -limit / 2, limit], [-limit, limit / 2, limit]])
+    roots, _, delta, unfinished, _, score = _newton_fit_windows(
+        windows, np.ones(3), SmoothAbs(1, lookup=lookup), 100, 1e-12
+    )
+    assert unfinished == 0
+    assert np.isfinite(delta) and np.isfinite(score)
+    np.testing.assert_allclose(roots / limit, [-0.5, 0.5], rtol=2e-12, atol=0)
+
+
+@pytest.mark.parametrize("lookup", [False, True])
+def test_outlier_restart_and_bracket_probes_preserve_worker_parity(lookup):
+    y = np.sin(2 * np.pi * np.arange(129) / 129)
+    y[32] = 3.4e38
+    config = dict(contrast=SmoothAbs(0.2, lookup=lookup), solver="newton", on_unconverged="raise")
+    serial = IMF(**config).decompose(y, k_max=None, h_min=1.5 / len(y))
+    parallel = IMF(**config, workers=8).decompose(y, k_max=None, h_min=1.5 / len(y))
+    assert np.array_equal(parallel.imfs, serial.imfs)
+    assert np.array_equal(parallel.residual, serial.residual)
+    assert parallel.stages == serial.stages

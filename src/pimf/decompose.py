@@ -21,10 +21,12 @@ class StageInfo:
     """Per-stage diagnostics; converged means unconverged_windows is zero.
 
     GD counts rows failing delta <= tol * (1 + max(abs(x))) using each chunk's
-    final estimates, including NaNs. A zero count does not bound root distance.
+    final estimates, ignoring NaNs in the maximum but counting NaN updates.
+    A zero count does not bound root distance.
     Newton counts rows without a positional root bracket or resolved flat
     interval at the cap; non-finite estimates or scores remain unconverged.
-    Iterative fits report the largest absolute weighted score at final estimates.
+    GD reports the largest absolute score at the last evaluated iterate, before
+    the final update; Newton evaluates it at the returned estimates.
     Parallel fits take maxima of iterations, final_max_delta and max_abs_score,
     propagating NaN, and sum unconverged_windows and bisection_fallbacks.
     Bisection counts include both flat-boundary searches and are zero for GD.
@@ -63,7 +65,8 @@ def _gd_fit_windows(windows, weights, contrast, max_iter, tol):
 
     Port of robust_gd_fit_windows from the research notebooks, generalized to
     any contrast via psi and curvature. Returns the estimates, iteration count,
-    maximum final update and number of rows exceeding the chunk's stop threshold.
+    maximum final update, unfinished count, zero fallbacks and largest absolute
+    score at the last evaluated iterate, before the final update.
     """
     weights = weights / weights.sum()
     row_weights = weights.reshape(1, -1)
@@ -95,7 +98,7 @@ def _gd_fit_windows(windows, weights, contrast, max_iter, tol):
 
     count_threshold = tol * (1.0 + float(np.nanmax(np.abs(x), initial=0.0)))
     unconverged_windows = int(np.count_nonzero(~(delta <= count_threshold)))
-    return x, iterations, max_delta, unconverged_windows
+    return x, iterations, max_delta, unconverged_windows, 0, float(np.max(np.abs(local_score)))
 
 
 class IMF:
@@ -257,20 +260,7 @@ class IMF:
                 return solve(windows, weights), 1, float("nan"), 0, 0, float("nan")
             if self.solver == "newton":
                 return _newton_fit_windows(windows, weights, self.contrast, self.max_iter, self.tol)
-            component, iterations, delta, unconverged_windows = _gd_fit_windows(
-                windows, weights, self.contrast, self.max_iter, self.tol
-            )
-            score = np.sum(
-                (weights / weights.sum()) * self.contrast.psi(windows - component[:, None]), axis=1
-            )
-            return (
-                component,
-                iterations,
-                delta,
-                unconverged_windows,
-                0,
-                float(np.max(np.abs(score))),
-            )
+            return _gd_fit_windows(windows, weights, self.contrast, self.max_iter, self.tol)
 
         chunk_size = (
             len(y) if self.workers == 1 else max(64, (len(y) + self.workers - 1) // self.workers)

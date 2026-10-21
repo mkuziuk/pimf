@@ -26,7 +26,7 @@ assert functions <= namespace.keys()
 grid = namespace["make_lookup_grid"]()
 
 
-def roots(windows, weights, H, lookup=True):
+def roots(windows, weights, H, lookup=True, iterations=80):
     """Bisect both edges of the zero set, including flat score intervals."""
     positive = weights > 0
     windows, weights = windows[:, positive].astype(float), weights[positive]
@@ -34,7 +34,7 @@ def roots(windows, weights, H, lookup=True):
     boundaries = []
     for right_edge in (False, True):
         lo, hi = windows.min(axis=1), windows.max(axis=1)
-        for _ in range(80):
+        for _ in range(iterations):
             mid = 0.5 * lo + 0.5 * hi
             residuals = windows - mid[:, None]
             score = (
@@ -102,6 +102,19 @@ for lookup in (False, True):
     fixture[f"tiny_H_root_{lookup}"] = roots(fixture["tiny_H_window"], np.ones(5), 1e-14, lookup)
     fixture[f"wide_roots_{lookup}"] = roots(
         fixture["wide_windows"], fixture["adversarial_weights"], 1.0, lookup
+    )
+
+fixture["extreme_outliers"] = np.array([1e15, 1e30, 9.97e36, 3.4e38])
+fixture["extreme_windows"] = np.tile([0.1, -0.2, 0.0, 0.0, 0.3, -0.1, 0.2], (4, 1))
+fixture["extreme_windows"][:, 3] = fixture["extreme_outliers"]
+fixture["extreme_spikes"] = np.zeros((4, 7))
+fixture["extreme_spikes"][:, 3] = fixture["extreme_outliers"]
+for lookup in (False, True):
+    fixture[f"extreme_roots_{lookup}"] = roots(
+        fixture["extreme_windows"], np.ones(7), 0.2, lookup, iterations=256
+    )
+    fixture[f"extreme_spike_roots_{lookup}"] = roots(
+        fixture["extreme_spikes"], spike_weights, 0.2, lookup, iterations=256
     )
 
 n = 2048
