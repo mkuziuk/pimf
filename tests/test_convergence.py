@@ -5,7 +5,7 @@ import numpy as np
 import pytest
 from numpy.lib.stride_tricks import sliding_window_view
 
-from pimf import IMF, Quadratic, SmoothAbs
+from pimf import IMF, Quadratic, SmoothAbs, uniform
 
 
 @pytest.fixture
@@ -161,3 +161,24 @@ def test_nan_score_is_unconverged_and_propagates_across_chunks(reverse, workers)
     method.on_unconverged = "raise"
     with pytest.raises(RuntimeError, match="windows did not converge"):
         method.decompose(y, window_sizes=[3])
+
+
+@pytest.mark.parametrize("workers", [1, 4])
+def test_nan_rows_do_not_mark_finite_neighbors_unconverged(workers):
+    class NanScore(SmoothAbs):
+        def psi(self, r):
+            return np.where(r > 50, np.nan, super().psi(r))
+
+    y = np.zeros(512)
+    y[10] = 100
+    result = IMF(NanScore(1), kernel=uniform, workers=workers, on_unconverged="ignore").decompose(
+        y, window_sizes=[3]
+    )
+    stage = result.stages[0]
+    assert stage.unconverged_windows == 3
+    assert stage.iterations == 60
+    assert not stage.converged
+    assert np.isnan(stage.final_max_delta)
+    assert np.count_nonzero(np.isnan(result.imfs[0])) == 3
+    np.testing.assert_allclose(result.imfs[0, :9], 0.0, rtol=0, atol=0)
+    np.testing.assert_allclose(result.imfs[0, 12:], 0.0, rtol=0, atol=0)

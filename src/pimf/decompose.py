@@ -84,7 +84,8 @@ def _gd_fit_windows(windows, weights, contrast, max_iter, tol):
         if max_delta <= threshold:
             break
 
-    unconverged_windows = int(np.count_nonzero(~(delta <= threshold)))
+    count_threshold = tol * (1.0 + float(np.nanmax(np.abs(x), initial=0.0)))
+    unconverged_windows = int(np.count_nonzero(~(delta <= count_threshold)))
     return x, iterations, max_delta, unconverged_windows
 
 
