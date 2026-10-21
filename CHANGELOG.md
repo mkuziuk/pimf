@@ -5,7 +5,8 @@
 - Add `IMF(on_unconverged="warn" | "raise" | "ignore")`, defaulting to one
   `RuntimeWarning` per stage that hits `max_iter` with unconverged windows.
   For GD, windows are still moving above the final chunk threshold,
-  `tol * (1 + max(abs(x)))`. Non-finite updates count as unconverged.
+  `tol * (1 + max(abs(x)))`. The count ignores NaNs in the maximum without
+  changing the research stop rule. Non-finite updates count as unconverged.
   Messages name the stage, window size and total unconverged window count.
 - Batch users can silence warnings with `on_unconverged="ignore"` and inspect
   `StageInfo.converged` / `unconverged_windows`, or use a Python `warnings`
@@ -15,8 +16,11 @@
   independent window stopping. Small steps require a positional root bracket;
   flat zero-score intervals in either lookup mode return the midpoint of
   boundaries located to tolerance at their edge scale. Non-finite scores or
-  estimates remain unconverged. Built-in contrasts give bit-identical values
-  and diagnostics across worker counts, including singleton chunks.
+  estimates remain unconverged. Saturated initial means restart at a sample
+  median, and local score probes tighten outlier-wide brackets before fallback
+  bisections. Constant windows finish without probes, including extreme finite
+  values. Built-in contrasts give bit-identical values and diagnostics across
+  worker counts, including singleton chunks.
 - Newton defaults to `max_iter=100` and `tol=1e-12`. Default GD retains 60
   iterations, `tol=1e-6` and bit-identical research numerics. Both target the
   same score equation. Differences beyond stopping roundoff occur where GD
@@ -28,20 +32,21 @@
   implementations for `Quadratic` and `SmoothAbs`. Slopes use raw residual
   units, including `1/H`; lookup slopes follow the piecewise-linear score,
   while direct evaluation uses the Gaussian slope and research `erf_approx`
-  score. Small H avoids intermediate slope overflow. Closed-form `solve()`
+  score. `psi_prime` no longer overflows for very small H. Closed-form `solve()`
   hooks still take precedence over either solver.
 - Document every `StageInfo` field: `stage`, `window_size`, `bandwidth`,
   `iterations`, `final_max_delta`, `converged`, and new `unconverged_windows`,
   `bisection_fallbacks` and `max_abs_score`. Both iterative solvers report the
-  largest absolute final weighted score. GD adds one score evaluation without
-  changing its updates. Direct fits keep NaN scores and deltas. Parallel
-  maxima propagate NaN; counts sum across workers. Identical GD runs retain
-  equal stage diagnostics.
+  largest absolute weighted score. GD uses the last evaluated iterate, before
+  the final update, without an extra score pass; Newton uses the returned
+  estimates. GD updates are unchanged. Direct fits keep NaN scores and deltas.
+  Parallel maxima propagate NaN; counts sum across workers. Identical GD runs
+  retain equal stage diagnostics.
 - Add research-score fixtures for adversarial plateaus and tiny H, numerical
   regressions and a reproducible solver benchmark. Each Newton iteration
   needs score and slope evaluations plus any probes or bisections. On the
   issue #3 bursty signals at L=1024/2048/4096, measured speedups over default
-  GD were 4.41x/5.12x/5.20x; see `benchmarks/README.md` for costs and protocol.
+  GD were 4.40x/5.10x/5.01x; see `benchmarks/README.md` for costs and protocol.
 
 ### Upgrading from 0.4.0
 
