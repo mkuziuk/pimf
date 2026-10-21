@@ -1,5 +1,28 @@
 # Changelog
 
+## 0.5.1
+
+- Speed up `solver="newton"`. On the bursty benchmark signal, full
+  decompositions with `SmoothAbs` lookup scores ran 2.2x, 2.4x and 3.2x faster
+  than 0.5.0 at L=1024, 2048 and 4096. NumPy remains the only dependency.
+- Lookup scores and slopes now share one table position per sample and are
+  evaluated in cache-sized row blocks with reused buffers. They reproduce
+  `SmoothAbs.psi` and `psi_prime` bit for bit. Weighted sums keep NumPy's
+  per-row pairwise reduction, so results stay bit-identical across worker
+  counts.
+- With lookup scores, a small Newton step first evaluates the score at its
+  candidate. A row that finishes there reports that score, so the final pass
+  covers only the remaining rows. Lookup scores are nonincreasing as
+  computed, so finite positional probes whose sign this score or the score at
+  the current estimate already fixes are skipped.
+- Custom contrasts and `lookup=False` keep 0.5.0's evaluation calls, including
+  both probes, so their score dtypes and memory layouts reduce as before.
+- Newton returns the same roots and diagnostics as 0.5.0, bit for bit, on the
+  reference fixtures and in randomized stress tests.
+- GD results are unchanged.
+- Add `benchmarks/newton_stages.py`, which times each Newton stage and also
+  runs against an installed 0.5.0.
+
 ## 0.5.0
 
 - Add `IMF(on_unconverged="warn" | "raise" | "ignore")`, defaulting to one
