@@ -3,22 +3,22 @@
 ## 0.5.1
 
 - Speed up `solver="newton"`. On the bursty benchmark signal, full
-  decompositions with `SmoothAbs` lookup scores ran 2.4x, 3.1x and 3.6x faster
+  decompositions with `SmoothAbs` lookup scores ran 2.2x, 2.4x and 3.2x faster
   than 0.5.0 at L=1024, 2048 and 4096. NumPy remains the only dependency.
 - Lookup scores and slopes now share one table position per sample and are
-  evaluated in cache-sized row blocks with reused buffers. Weighted sums still
-  use NumPy's per-row pairwise reduction, so results stay bit-identical across
-  worker counts.
-- A small Newton step first evaluates the score at its candidate. With the
-  score at the current estimate, it fixes the sign of a positional probe
-  without evaluating it. A row that finishes at the candidate reports that
-  score, so the final pass covers only the remaining rows.
-- Newton keeps 0.5.0's rules: weighted-mean start and weighted-median restart,
-  the rtsafe safeguard, float64-rank bisection, the positional bracket check,
-  plateau midpoints and non-finite handling. On the reference fixtures, roots
-  differ from 0.5.0 by at most 1% of `tol * (1 + abs(x))`, with identical
-  convergence flags, iteration counts and bisection counts. Direct evaluation
-  (`lookup=False`) and custom contrasts compute scores as before.
+  evaluated in cache-sized row blocks with reused buffers. They reproduce
+  `SmoothAbs.psi` and `psi_prime` bit for bit. Weighted sums keep NumPy's
+  per-row pairwise reduction, so results stay bit-identical across worker
+  counts.
+- A small Newton step first evaluates the score at its candidate. Positional
+  probes whose sign this score or the score at the current estimate already
+  fixes are skipped. A row that finishes at the candidate reports that score,
+  so the final pass covers only the remaining rows.
+- Newton returns the same roots and diagnostics as 0.5.0, bit for bit, on the
+  reference fixtures and in randomized stress tests. Skipped probes assume a
+  nonincreasing computed score. At tolerances near machine precision, rounding
+  can break that assumption, and a root can then move by a few tolerances to
+  another sign change.
 - GD results are unchanged.
 - Add `benchmarks/newton_stages.py`, which times each Newton stage and also
   runs against an installed 0.5.0.

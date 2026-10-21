@@ -758,6 +758,16 @@ def test_residuals_just_beyond_8H_have_zero_slope():
     )
 
 
+@pytest.mark.parametrize("lookup", [False, True])
+def test_nan_and_zero_weights_inside_the_span_are_dropped(lookup):
+    windows = np.random.default_rng(2).normal(size=(4, 5))
+    contrast = SmoothAbs(0.5, lookup=lookup)
+    expected = _newton_fit_windows(windows[:, [0, 3, 4]], np.ones(3), contrast, 100, 1e-12)
+    for weights in ([1, np.nan, 0, 1, 1], [1, 0, np.nan, 1, 1]):
+        result = _newton_fit_windows(windows, np.array(weights, float), contrast, 100, 1e-12)
+        assert_same_fit(result, expected)
+
+
 @pytest.mark.parametrize("size", [65, 9001])
 def test_singleton_rows_match_batched_rows(size):
     windows = np.random.default_rng(7).normal(size=(5, size))

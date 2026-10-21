@@ -35,15 +35,15 @@ def _newton_fit_windows(windows, weights, contrast, max_iter, tol):
     reduces the step to less than half the step before last. Wide brackets
     bisect float64 ranks to bound the number of halvings across extreme
     outliers. Small steps need a positional bracket at candidate +- epsilon.
-    The scores at the estimate and the candidate stand in for a probe whose
-    sign they fix; a row finishing there reports the candidate's score.
+    Probes whose sign the scores at the estimate or the candidate already fix
+    are not evaluated; a row finishing there reports the candidate's score.
     Flat zero intervals use the midpoint of their two boundaries, each located
     by bisection within the same cap.
     """
     # Slicing the positive span copies sliding windows much faster than a mask.
     first, last = np.flatnonzero(weights > 0)[[0, -1]]
     windows, weights = windows[:, first : last + 1], weights[first : last + 1]
-    if np.any(weights <= 0):
+    if not np.all(weights > 0):
         windows, weights = windows[:, weights > 0], weights[weights > 0]
     # A contiguous reduction axis keeps singleton chunks on the same sum path.
     windows = np.ascontiguousarray(windows, dtype=float)
@@ -62,6 +62,10 @@ def _newton_fit_windows(windows, weights, contrast, max_iter, tol):
         position, floor, index = np.empty(shape), np.empty(shape), np.empty(shape, dtype=np.intp)
         tiled_weights = np.tile(weights, (shape[0], 1))
 
+    lo, hi = windows.min(axis=1), windows.max(axis=1)
+    # Finite samples give NaN table positions only at NaN estimates.
+    finite_samples = np.all(np.isfinite(lo)) and np.all(np.isfinite(hi))
+
     def evaluate(rows, estimates, slope=False):
         """Weighted scores, and slopes if requested, of rows (None: all) at estimates."""
         scores = np.empty(len(estimates))
@@ -77,7 +81,7 @@ def _newton_fit_windows(windows, weights, contrast, max_iter, tol):
                     psi_prime = contrast.psi_prime(sample - estimate)
                     slopes[part] = np.sum(weights * psi_prime, axis=1)
                 continue
-            # SmoothAbs.psi and psi_prime arithmetic, sharing one table position.
+            # Must match SmoothAbs.psi and psi_prime bit for bit; both share a position.
             n = len(estimate)
             p, f, i, w = position[:n], floor[:n], index[:n], tiled_weights[:n]
             if rows is None:
@@ -112,9 +116,6 @@ def _newton_fit_windows(windows, weights, contrast, max_iter, tol):
         middle = np.argmax(np.cumsum(weights[order], axis=1) >= 0.5, axis=1)
         return windows[rows, order[np.arange(len(rows)), middle]]
 
-    lo, hi = windows.min(axis=1), windows.max(axis=1)
-    # Finite samples give NaN table positions only at NaN estimates.
-    finite_samples = np.all(np.isfinite(lo)) and np.all(np.isfinite(hi))
     with np.errstate(over="ignore", invalid="ignore"):
         x = np.clip(np.sum(windows * weights, axis=1), lo, hi)
         previous_step = hi - lo
@@ -191,7 +192,7 @@ def _newton_fit_windows(windows, weights, contrast, max_iter, tol):
                     left, right = cs - epsilon, cs + epsilon
                     at_candidate = evaluate(probe_rows, cs)[0]
                     # A nonincreasing score keeps the sign of score(x) or score(candidate)
-                    # at a probe beyond them; only the remaining probes are evaluated.
+                    # at a probe beyond them.
                     left_score = np.where(at_candidate > 0, at_candidate, ss)
                     right_score = np.where(at_candidate < 0, at_candidate, ss)
                     probe_left = ~((at_candidate > 0) | ((ss > 0) & (left <= xs)))
