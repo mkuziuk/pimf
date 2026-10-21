@@ -25,14 +25,12 @@ def test_reconstruction_linear(noisy_signal):
 
 
 def test_reconstruction_robust(noisy_signal):
-    result = IMF(SmoothAbs(H=0.4), on_unconverged="ignore").decompose(noisy_signal)
+    result = IMF(SmoothAbs(H=0.4)).decompose(noisy_signal)
     assert np.max(np.abs(result.reconstruction - noisy_signal)) < 1e-10
 
 
 def test_shapes_and_stage_info(noisy_signal):
-    result = IMF(SmoothAbs(H=0.4), on_unconverged="ignore").decompose(
-        noisy_signal, window_sizes=[151, 75, 31]
-    )
+    result = IMF(SmoothAbs(H=0.4)).decompose(noisy_signal, window_sizes=[151, 75, 31])
     assert result.imfs.shape == (3, len(noisy_signal))
     assert result.residual.shape == (len(noisy_signal),)
     assert result.window_sizes == [151, 75, 31]

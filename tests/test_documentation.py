@@ -1,10 +1,7 @@
 from html.parser import HTMLParser
 from pathlib import Path
 
-import pytest
 
-
-@pytest.mark.filterwarnings("ignore:Stage .* windows did not converge after:RuntimeWarning")
 def test_documentation_examples_and_local_links():
     class Documentation(HTMLParser):
         def __init__(self):

@@ -60,22 +60,25 @@ def test_unconverged_policy_and_total_count_across_chunks(spike, workers, policy
 
 
 @pytest.mark.parametrize("large_first", [False, True])
-def test_row_diagnostics_detect_failure_hidden_by_research_stopping_rule(large_first):
+@pytest.mark.parametrize("max_iter", [1, 60])
+@pytest.mark.parametrize("policy", ["warn", "raise", "ignore"])
+def test_row_diagnostics_use_research_stopping_threshold(large_first, max_iter, policy):
     large = np.full(128, 1e9)
     small = np.tile([0.0, 0.0, 10.0, 2.0, 0.0, 1.0, 0.0, 0.0], 16)
     y = np.concatenate((large, small) if large_first else (small, large))
-    with pytest.warns(RuntimeWarning, match=r"Stage 1 \(window size 5\)"):
-        result = IMF(SmoothAbs(0.2), boundary="edge").decompose(y, window_sizes=[5])
+    result = IMF(
+        SmoothAbs(0.2), boundary="edge", max_iter=max_iter, on_unconverged=policy
+    ).decompose(y, window_sizes=[5])
     stage = result.stages[0]
     initial = np.median(sliding_window_view(np.pad(y, 2, mode="edge"), 5), axis=1)
     final = result.imfs[0]
     delta = np.abs(final - initial)
-    expected_count = np.count_nonzero(delta > 1e-6 * (1 + np.abs(final)))
+    threshold = 1e-6 * (1 + np.max(np.abs(final)))
     assert stage.iterations == 1
-    assert stage.final_max_delta <= 1e-6 * (1 + np.max(np.abs(final)))
-    assert stage.unconverged_windows == expected_count
-    assert expected_count > 0
-    assert not stage.converged
+    assert stage.final_max_delta <= threshold
+    assert np.any(delta > 1e-6 * (1 + np.abs(final)))
+    assert stage.unconverged_windows == np.count_nonzero(delta > threshold) == 0
+    assert stage.converged
 
 
 def test_issue_3_bursty_signal_warns_at_defaults():
@@ -91,7 +94,7 @@ def test_issue_3_bursty_signal_warns_at_defaults():
     unfinished = [stage for stage in result.stages if not stage.converged]
     assert len(result.stages) == 17
     assert len(caught) == len(unfinished)
-    assert any(stage.iterations == 60 for stage in unfinished)
+    assert all(stage.iterations == 60 for stage in unfinished)
     for warning, stage in zip(caught, unfinished, strict=True):
         assert 0 < stage.unconverged_windows <= n
         assert str(warning.message) == (

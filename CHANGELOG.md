@@ -3,12 +3,13 @@
 ## Unreleased
 
 - Add `IMF(on_unconverged="warn" | "raise" | "ignore")`, defaulting to a
-  `RuntimeWarning` with the stage, window size and total unconverged window count.
+  `RuntimeWarning` when a stage hits `max_iter` with windows still moving. The
+  message includes the stage, window size and total unconverged window count.
   The policy also applies with multiple workers.
-- Add `StageInfo.unconverged_windows` and test each row's final update against its
-  own tolerance when reporting convergence. Preserve research numerical results
-  and stopping iterations; rows are not frozen independently. The policy also
-  covers rows that fail their tolerance when the research stop rule exits early.
+- Add `StageInfo.unconverged_windows`, counting final row updates above the
+  solver chunk's stopping threshold, `tol * (1 + max(abs(x)))`. Preserve research
+  numerical results and stopping iterations. `converged=True` means this count
+  is zero; it does not bound distance to the score root.
 
 ## 0.4.0
 

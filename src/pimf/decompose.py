@@ -17,10 +17,12 @@ from .kernels import squared_triangle
 
 @dataclass(frozen=True)
 class StageInfo:
-    """Per-stage diagnostics; the closed-form path reports iterations=1 and
-    final_max_delta=nan, with no unconverged windows. Parallel fits report maxima
-    across chunks and sum unconverged_windows. Every row must meet its own update
-    tolerance for converged=True; this does not bound error to the score root.
+    """Per-stage diagnostics; unconverged windows hit max_iter with final updates
+    above tol * (1 + max(abs(x))), using each chunk's final estimates.
+    converged is True exactly when unconverged_windows is zero; this does not
+    bound distance to the score root. Parallel fits report maximum iterations
+    and final_max_delta across chunks and sum unconverged_windows. Direct solvers
+    report iterations=1 and final_max_delta=nan, with no unconverged windows.
     """
 
     stage: int
@@ -52,7 +54,7 @@ def _gd_fit_windows(windows, weights, contrast, max_iter, tol):
 
     Port of robust_gd_fit_windows from the research notebooks, generalized to
     any contrast via psi and curvature. Returns the estimates, iteration count,
-    maximum final update and number of rows failing their own update tolerance.
+    maximum final update and number of rows exceeding the chunk's stop threshold.
     """
     weights = weights / weights.sum()
     row_weights = weights.reshape(1, -1)
@@ -78,10 +80,11 @@ def _gd_fit_windows(windows, weights, contrast, max_iter, tol):
         x = x_next
         iterations += 1
         # Keep the research stopping rule to preserve regression values.
-        if max_delta <= tol * (1.0 + float(np.max(np.abs(x)))):
+        threshold = tol * (1.0 + float(np.max(np.abs(x))))
+        if max_delta <= threshold:
             break
 
-    unconverged_windows = int(np.count_nonzero(~(delta <= tol * (1.0 + np.abs(x)))))
+    unconverged_windows = int(np.count_nonzero(delta > threshold))
     return x, iterations, max_delta, unconverged_windows
 
 
@@ -90,7 +93,7 @@ class IMF:
 
     Quadratic contrasts use their closed-form solver. Other contrasts use
     clipped gradient descent. Each decompose() call returns an independent result.
-    on_unconverged controls stages with rows that fail their update tolerance:
+    on_unconverged controls stages that hit max_iter with windows still moving:
     "warn" emits RuntimeWarning, "raise" raises RuntimeError, "ignore" is silent.
     """
 

@@ -74,6 +74,7 @@ def test_inclusive_minimum_survives_geometric_roundoff():
 def test_explicit_windows_define_the_schedule(contrast):
     y = np.random.default_rng(777).normal(size=64)
     windows = [31, 15, 7]
+    # This noise sample hits the iteration cap at all three robust stages.
     result = IMF(contrast, on_unconverged="ignore").decompose(y, window_sizes=windows)
     assert result.window_sizes == windows
     assert result.bandwidths == [15 / 64, 7 / 64, 3 / 64]
@@ -100,6 +101,7 @@ def test_custom_profile_subclass_supports_fractional_bandwidths():
 
 
 def test_configuration_reuse_returns_independent_results():
+    # This noise sample hits the iteration cap at both stages.
     model = IMF(SmoothAbs(H=0.2), kernel=triangle, on_unconverged="ignore")
     y = np.random.default_rng(12).normal(size=32)
     original = y.copy()
