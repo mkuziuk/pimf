@@ -160,7 +160,16 @@ edge:     1 1 | 1 2 3 4 | 4 4</code></pre>
 careful_result = careful.decompose(y, k_max=6)</code></pre>
       <p>Check <code>stage.converged</code>: <code>False</code> means the stage hit <code>max_iter</code> with windows still moving above the stopping threshold. Increase <code>max_iter</code> to allow more work, or increase <code>tol</code> to accept a larger final update. This is separate from <code>k_max</code>, which limits the number of components.</p>
       <p>By default, each stage that hits this cap with unconverged windows emits one <code>RuntimeWarning</code> naming the stage number, window size and total number of unconverged rows across workers. Set <code>IMF(..., on_unconverged="raise")</code> to raise <code>RuntimeError</code>, or <code>on_unconverged="ignore"</code> to stay silent. Invalid policies raise <code>ValueError</code>.</p>
-      <p>The research iteration and its whole-chunk stopping rule are preserved to keep existing numerical results. Each row's final update uses the same threshold as the stop test, <code>tol * (1 + max(abs(x_chunk)))</code>, evaluated at the chunk's final estimates. A small update and <code>converged=True</code> do not bound distance to the score root. Exact reconstruction does not prove that the components converged.</p>
+      <p>The research iteration and its whole-chunk stopping rule are preserved to keep existing numerical results. Each row's final update uses the same threshold as the stop test, <code>tol * (1 + max(abs(x_chunk)))</code>, evaluated at the chunk's final estimates. A small update and <code>converged=True</code> do not bound distance to the score root. Non-finite updates also count as unconverged. Exact reconstruction does not prove that the components converged.</p>
+      <p>Long schedules and repeated decompositions can emit many per-stage warnings. For batch runs, set <code>on_unconverged="ignore"</code> and inspect <code>StageInfo.converged</code> and <code>unconverged_windows</code>, or use a Python <code>warnings</code> filter:</p>
+      <pre><code class="language-python">batch = IMF(SmoothAbs(0.2), on_unconverged="ignore").decompose(y)
+unfinished_counts = [stage.unconverged_windows for stage in batch.stages]
+
+import warnings
+
+with warnings.catch_warnings():
+    warnings.filterwarnings("ignore", message=r"Stage .* windows did not converge", category=RuntimeWarning)
+    filtered = IMF(SmoothAbs(0.2)).decompose(y)</code></pre>
     </section>
     <section id="parallel">
       <h2>Parallel execution</h2>

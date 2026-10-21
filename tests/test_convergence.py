@@ -122,3 +122,42 @@ def test_converged_runs_are_silent(contrast, policy, workers):
 def test_invalid_unconverged_policy_raises_value_error(policy):
     with pytest.raises(ValueError, match="on_unconverged"):
         IMF(on_unconverged=policy)
+
+
+def test_nan_estimates_trigger_unconverged_policy():
+    with np.errstate(all="ignore"):
+        with pytest.raises(RuntimeError, match="3 windows did not converge"):
+            IMF(SmoothAbs(1.7e308), max_iter=1, on_unconverged="raise").decompose(
+                np.ones(3), window_sizes=[3]
+            )
+        result = IMF(SmoothAbs(1.7e308), max_iter=1, on_unconverged="ignore").decompose(
+            np.ones(3), window_sizes=[3]
+        )
+    assert not result.stages[0].converged
+    assert result.stages[0].unconverged_windows == 3
+    assert np.isnan(result.stages[0].final_max_delta)
+
+
+@pytest.mark.parametrize("reverse", [False, True])
+@pytest.mark.parametrize("workers", [1, 3])
+def test_nan_score_is_unconverged_and_propagates_across_chunks(reverse, workers):
+    class NanScore:
+        def psi(self, r):
+            return np.where(r > 5, np.nan, r)
+
+        def curvature(self):
+            return 1.0
+
+    y = np.zeros(129)
+    y[-2] = 10
+    if reverse:
+        y = y[::-1]
+    method = IMF(NanScore(), workers=workers, max_iter=1, on_unconverged="ignore")
+    result = method.decompose(y, window_sizes=[3])
+    stage = result.stages[0]
+    assert not stage.converged
+    assert stage.unconverged_windows > 0
+    assert np.isnan(stage.final_max_delta)
+    method.on_unconverged = "raise"
+    with pytest.raises(RuntimeError, match="windows did not converge"):
+        method.decompose(y, window_sizes=[3])

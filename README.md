@@ -20,6 +20,10 @@ still moving above the stopping threshold. Set `on_unconverged="raise"` to raise
 count is zero. Each row uses the same threshold as its solver chunk,
 `tol * (1 + max(abs(x)))`, evaluated at the final estimates. Research numerical
 results and stopping iterations are preserved. `converged=True` does not bound
-distance to the score root.
+distance to the score root. Non-finite updates also count as unconverged.
+For batch runs, use `on_unconverged="ignore"` and inspect `StageInfo.converged`
+and `unconverged_windows`, or filter these warnings with Python's `warnings`
+module. The default emits one warning per unconverged stage, so long schedules
+and repeated decompositions can produce many warnings.
 
 [Release notes](CHANGELOG.md)

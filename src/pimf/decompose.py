@@ -84,7 +84,7 @@ def _gd_fit_windows(windows, weights, contrast, max_iter, tol):
         if max_delta <= threshold:
             break
 
-    unconverged_windows = int(np.count_nonzero(delta > threshold))
+    unconverged_windows = int(np.count_nonzero(~(delta <= threshold)))
     return x, iterations, max_delta, unconverged_windows
 
 
@@ -249,7 +249,7 @@ class IMF:
                     )
                     component = np.concatenate([part[0] for part in fits])
                     iterations = max(part[1] for part in fits)
-                    delta = max(part[2] for part in fits)
+                    delta = float(np.max([part[2] for part in fits]))
                     unconverged_windows = sum(part[3] for part in fits)
                 if unconverged_windows:
                     message = (

@@ -9,7 +9,11 @@
 - Add `StageInfo.unconverged_windows`, counting final row updates above the
   solver chunk's stopping threshold, `tol * (1 + max(abs(x)))`. Preserve research
   numerical results and stopping iterations. `converged=True` means this count
-  is zero; it does not bound distance to the score root.
+  is zero; it does not bound distance to the score root. Non-finite updates
+  count as unconverged, and parallel diagnostics propagate NaN.
+- Batch users can silence per-stage warnings with `on_unconverged="ignore"`
+  and inspect `StageInfo.converged` / `unconverged_windows`, or use a Python
+  `warnings` filter. Long schedules and repeated runs can emit many warnings.
 
 ## 0.4.0
 
